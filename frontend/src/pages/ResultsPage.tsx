@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import { Card, Button, PageHeader, EmptyState, Skeleton } from '../components/ui';
 import type { Lead } from '../types';
@@ -57,6 +57,9 @@ function ValidationBadge({ status }: { status: string | null }) {
 }
 
 export default function ResultsPage() {
+  const location = useLocation();
+  const searchId = (location.state as { searchId?: string; query?: string })?.searchId || null;
+  const searchQuery = (location.state as { searchId?: string; query?: string })?.query || null;
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -83,6 +86,7 @@ export default function ResultsPage() {
 
       while (hasMore) {
         const params = new URLSearchParams({ limit: limit.toString(), offset: offset.toString() });
+        if (searchId) params.set('search_id', searchId);
         if (filterMinScore) params.set('min_score', filterMinScore);
         if (filterMaxScore) params.set('max_score', filterMaxScore);
         if (filterIndustry) params.set('industry', filterIndustry);
@@ -103,7 +107,7 @@ export default function ResultsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filterMinScore, filterMaxScore, filterIndustry, filterCity, filterHasPhone, filterHasEmail, filterValidation]);
+  }, [searchId, filterMinScore, filterMaxScore, filterIndustry, filterCity, filterHasPhone, filterHasEmail, filterValidation]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { setPage(1); }, [filterMinScore, filterMaxScore, filterIndustry, filterCity, filterHasPhone, filterHasEmail, filterValidation]);
@@ -169,7 +173,7 @@ export default function ResultsPage() {
   return (
     <div>
       <PageHeader
-        title="Results"
+        title={searchQuery ? `Results for "${searchQuery}"` : "Results"}
         description={`${leads.length} scored leads`}
         actions={
           <div className="flex gap-2">

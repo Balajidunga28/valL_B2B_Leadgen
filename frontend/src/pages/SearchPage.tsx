@@ -50,8 +50,8 @@ export default function SearchPage() {
         query: query.trim(),
         location,
       };
-      await apiClient.post<{ pipeline_run: { id: string; status: string } }>('/search', body);
-      navigate('/results');
+      const res = await apiClient.post<{ pipeline_run: { id: string; status: string } }>('/search', body);
+      navigate('/results', { state: { searchId: res.pipeline_run.id, query: query.trim() } });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed');
     } finally {

@@ -29,6 +29,7 @@ router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 @router.get("", response_model=list[LeadResponse])
 async def list_leads(
+    search_id: str | None = Query(None, description="Pipeline run ID to scope results to"),
     min_score: float | None = Query(None, description="Minimum total score"),
     max_score: float | None = Query(None, description="Maximum total score"),
     industry: str | None = Query(None, description="Industry filter"),
@@ -56,6 +57,19 @@ async def list_leads(
         .where(RawRecord.company_id.isnot(None))
         .group_by(RawRecord.company_id)
     ).subquery()
+
+    # Subquery: company IDs linked to a specific pipeline_run (via raw_records)
+    search_company_subq = None
+    if search_id:
+        from uuid import UUID
+        try:
+            run_uuid = UUID(search_id)
+            search_company_subq = (
+                select(RawRecord.company_id)
+                .where(RawRecord.pipeline_run_id == run_uuid)
+                .where(RawRecord.company_id.isnot(None))
+                .distinct()
+            ).subquery()
 
     query = (
         select(
@@ -87,6 +101,9 @@ async def list_leads(
         .outerjoin(source_subq, source_subq.c.company_id == Company.id)
         .where(Company.organization_id == current_user.organization_id)
     )
+
+    if search_company_subq is not None:
+        query = query.where(Company.id.in_(select(search_company_subq.c.company_id)))
 
     # Apply filters
     if min_score is not None:
