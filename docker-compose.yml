@@ -1,0 +1,61 @@
+# ValLG Docker Compose (OPTIONAL)
+# This file is for containerized deployment only.
+# Local development uses native PostgreSQL + Python + Node.js directly.
+# See .env.example for local database setup instructions.
+
+version: "3.8"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vallg
+      POSTGRES_PASSWORD: vallg
+      POSTGRES_DB: vallg
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vallg"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://vallg:vallg@db:5432/vallg
+      DATABASE_URL_ASYNC: postgresql+asyncpg://vallg:vallg@db:5432/vallg
+      JWT_SECRET: dev-secret-change-in-production
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000
+      DEBUG: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+
+volumes:
+  pgdata:
