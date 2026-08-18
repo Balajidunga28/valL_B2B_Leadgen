@@ -219,9 +219,11 @@ class WebSearchAdapter(SourceAdapter):
         search_terms = [
             f"{category} {loc} phone number address",
             f"{category} {loc} contact details",
+            f"{category} {loc} business directory",
             f"site:justdial.com {category} {loc}",
             f"site:indiamart.com {category} {loc}",
             f"site:sulekha.com {category} {loc}",
+            f"site:yellowpages.in {category} {loc}",
         ]
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()

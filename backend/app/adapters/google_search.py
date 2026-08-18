@@ -137,7 +137,7 @@ class GoogleSearchAdapter(SourceAdapter):
             "Accept-Language": "en-US,en;q=0.9",
         }
         records = []
-        bing_url = f"https://www.bing.com/search?q={qp(search_query + ' phone number address')}"
+        bing_url = f"https://www.bing.com/search?q={qp(search_query + ' business listing phone address ' + (search_query.split(' in ')[-1] if ' in ' in search_query else ''))}"
         try:
             resp = await self.client.get(bing_url, headers=headers, follow_redirects=True, timeout=15.0)
             if resp.status_code != 200:

@@ -213,14 +213,18 @@ class OpenStreetMapAdapter(SourceAdapter):
 
     def normalize(self, raw_record: dict[str, Any]) -> dict[str, Any]:
         """Normalize an OSM element to the common RawRecord schema."""
+        all_tags = raw_record.get("all_tags", {})
+        city = all_tags.get("addr:city")
+        state = all_tags.get("addr:state")
+        pin_code = all_tags.get("addr:postcode")
         return {
             "source_record_id": f"osm_{raw_record.get('osm_type', 'node')}_{raw_record.get('osm_id', '')}",
             "raw_data": {
                 "name": raw_record.get("name"),
                 "address": raw_record.get("address"),
-                "city": None,
-                "state": None,
-                "pin_code": None,
+                "city": city,
+                "state": state,
+                "pin_code": pin_code,
                 "phone": raw_record.get("phone"),
                 "website": raw_record.get("website"),
                 "email": raw_record.get("email"),
