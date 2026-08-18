@@ -55,6 +55,15 @@ async def search(
             detail=str(e),
         )
 
+    # Save pipeline_run fields before pipeline chain (commits expire ORM objects)
+    run_id = pipeline_run.id
+    run_query_text = pipeline_run.query_text
+    run_status = pipeline_run.status
+    run_sources_used = pipeline_run.sources_used or []
+    run_total_extracted = pipeline_run.total_extracted
+    run_error_message = pipeline_run.error_message
+    run_created_at = pipeline_run.created_at
+
     # Chain Levels 3-6 so companies are available immediately.
     # Pass pipeline_run_id to run_clean so it only processes raw records
     # from THIS search, not all historical records for the org.
@@ -66,34 +75,20 @@ async def search(
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning("Pipeline post-processing error: %s", e)
-        # Reset the session so subsequent queries don't fail
-        # with InFailedSQLTransactionError
         await db.rollback()
-
-    raw_records = await get_raw_records(db, pipeline_run.id, current_user.organization_id)
 
     return SearchResponse(
         pipeline_run=PipelineRunResponse(
-            id=str(pipeline_run.id),
-            query_text=pipeline_run.query_text,
-            status=pipeline_run.status,
-            sources_used=pipeline_run.sources_used or [],
-            total_extracted=pipeline_run.total_extracted,
-            error_message=pipeline_run.error_message,
-            created_at=pipeline_run.created_at,
+            id=str(run_id),
+            query_text=run_query_text,
+            status=run_status,
+            sources_used=run_sources_used,
+            total_extracted=run_total_extracted,
+            error_message=run_error_message,
+            created_at=run_created_at,
         ),
-        records=[
-            RawRecordResponse(
-                id=str(record.id),
-                source_adapter=record.source_adapter,
-                source_record_id=record.source_record_id,
-                raw_data=record.raw_data or {},
-                status=record.status,
-                retrieved_at=record.retrieved_at,
-            )
-            for record in raw_records
-        ],
-        total_count=len(raw_records),
+        records=[],
+        total_count=run_total_extracted,
     )
 
 
