@@ -127,61 +127,71 @@ class GoogleSearchAdapter(SourceAdapter):
     def _build_maps_url(self, query: str) -> str:
         return f"{MAPS_URL}/search/{quote_plus(query)}"
 
-    # --- httpx fallback: parse Google Maps search HTML ---
+    # --- httpx fallback: use Bing search instead of broken Google Maps HTML parsing ---
     async def _search_httpx(self, search_query: str, limit: int, extracted_at: str) -> list[dict[str, Any]]:
-        """Fallback: fetch Google Maps search page via httpx and parse results."""
-        url = self._build_maps_url(search_query)
+        """Fallback: when Playwright is unavailable, search Bing for business listings."""
+        from urllib.parse import quote_plus as qp
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
         records = []
+        bing_url = f"https://www.bing.com/search?q={qp(search_query + ' phone number address')}"
         try:
-            resp = await self.client.get(url, headers=headers, follow_redirects=True, timeout=20.0)
+            resp = await self.client.get(bing_url, headers=headers, follow_redirects=True, timeout=15.0)
             if resp.status_code != 200:
-                logger.warning("Google Maps httpx returned %d for '%s'", resp.status_code, search_query)
                 return []
             html = resp.text
-            if "unusual traffic" in html.lower():
-                logger.warning("Google Maps blocked httpx request")
-                return []
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html, "html.parser")
-            # Google Maps embeds data in script tags
-            scripts = soup.find_all("script")
-            for script in scripts:
-                text = script.string or ""
-                # Look for business-like JSON data in embedded scripts
-                name_matches = re.findall(r'"([^"]{3,60})"', text)
-                for name in name_matches:
-                    if any(skip in name.lower() for skip in ["google", "maps", "javascript", "function", "var ", "const ", "return", "undefined"]):
-                        continue
-                    if re.match(r"^[A-Za-z0-9\s&'./-]+$", name) and len(name) > 4:
-                        records.append({
-                            "name": name.strip(),
-                            "address": None,
-                            "phone": None,
-                            "website": None,
-                            "rating": None,
-                            "reviews_count": None,
-                            "category": None,
-                            "opening_hours": None,
-                            "latitude": None,
-                            "longitude": None,
-                            "maps_url": url,
-                            "_provenance": {
-                                "search_query": search_query,
-                                "search_url": url,
-                                "extracted_at": extracted_at,
-                                "extraction_method": "google_maps_httpx",
-                                "user_agent": headers["User-Agent"],
-                            },
-                        })
+            items = soup.select("li.b_algo")
+            for item in items:
+                title_el = item.select_one("h2 a")
+                snippet_el = item.select_one(".b_caption p, .b_algoSlug")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                link = title_el.get("href", "")
+                combined = f"{title} {snippet}"
+                phones = []
+                for pm in re.finditer(r"(?:\+91[\s\-]?)?(\d{5}[\s\-]?\d{5}|\d{4}[\s\-]?\d{3}[\s\-]?\d{3}|\d{10})", combined):
+                    phone = re.sub(r"[^0-9+]", "", pm.group(0))
+                    if len(phone) >= 10:
+                        phones.append(phone)
+                name = title.strip()
+                skip_words = ["list of", "top ", "best ", "directory of", "find ", "how to", "what is", "near me", "in india"]
+                if any(sw in name.lower() for sw in skip_words):
+                    continue
+                if len(name) < 3 or len(name) > 100:
+                    continue
+                name = re.sub(r"\s*[-–|]\s*(?:India|list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
+                if len(name) > 2:
+                    records.append({
+                        "name": name,
+                        "address": None,
+                        "phone": phones[0] if phones else None,
+                        "website": link if link and "bing.com" not in link else None,
+                        "rating": None,
+                        "reviews_count": None,
+                        "category": None,
+                        "opening_hours": None,
+                        "latitude": None,
+                        "longitude": None,
+                        "maps_url": None,
+                        "_provenance": {
+                            "search_query": search_query,
+                            "search_url": link,
+                            "extracted_at": extracted_at,
+                            "extraction_method": "google_search_bing_fallback",
+                            "user_agent": headers["User-Agent"],
+                        },
+                    })
                     if len(records) >= limit:
                         break
         except Exception as e:
-            logger.error("Google Maps httpx error for '%s': %s", search_query, e)
+            logger.error("Google Maps httpx Bing fallback error for '%s': %s", search_query, e)
         return records[:limit]
 
     # --- Playwright path (unchanged) ---
