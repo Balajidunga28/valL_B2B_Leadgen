@@ -4,7 +4,7 @@ About:
   Website-based enrichment. Scrapes company websites to extract
   industry, description, social links, founded year, company size,
   and contact information. Uses httpx for HTTP and BeautifulSoup for parsing.
-  Timeout: 10 seconds per request. Best-effort — failures return None.
+   Timeout: 5 seconds per request. Best-effort — failures return None.
 """
 
 import re
@@ -94,7 +94,7 @@ async def scrape_website(url: str) -> dict[str, Any]:
     try:
         import httpx
         async with httpx.AsyncClient(
-            timeout=10.0,
+            timeout=5.0,
             follow_redirects=True,
             headers={"User-Agent": "ValLG/1.0 (Enrichment Bot)"},
         ) as client:

@@ -15,6 +15,7 @@ About:
   - Export data (Level 7)
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -29,6 +30,8 @@ from app.services.enrich_website import scrape_website
 from app.services.enrich_infer import infer_industry_from_name, extract_from_raw_data
 
 logger = logging.getLogger(__name__)
+
+_SCRAPE_SEMAPHORE = asyncio.Semaphore(5)
 
 
 def _merge_enrichment(
@@ -138,10 +141,38 @@ async def run_enrich(
     )
     await db.flush()
 
-    # --- Step 3: Enrich each company ---
+    # --- Step 3: Parallel website scraping for all companies ---
+    async def _scrape_one(company):
+        if not company.website:
+            return company.id, {}
+        try:
+            async with _SCRAPE_SEMAPHORE:
+                data = await scrape_website(company.website)
+                if "error" not in data:
+                    return company.id, data
+                return company.id, {}
+        except Exception as e:
+            logger.warning("Website scrape error for %s: %s", company.name, e)
+            return company.id, {}
+
+    scrape_tasks = [_scrape_one(c) for c in companies]
+    scrape_results = await asyncio.gather(*scrape_tasks, return_exceptions=True)
+    website_data_map = {}
+    scrape_errors = 0
+    scrape_success = 0
+    for res in scrape_results:
+        if isinstance(res, Exception):
+            scrape_errors += 1
+            continue
+        cid, data = res
+        website_data_map[cid] = data
+        if data:
+            scrape_success += 1
+
+    # --- Step 4: Enrich each company (fast, local-only) ---
     stats = {
         "enriched": 0,
-        "with_website_scrape": 0,
+        "with_website_scrape": scrape_success,
         "with_industry_inference": 0,
         "with_metadata_extraction": 0,
         "with_social_links": 0,
@@ -149,7 +180,7 @@ async def run_enrich(
         "with_founded_year": 0,
         "with_company_size": 0,
         "with_description": 0,
-        "errors": 0,
+        "errors": scrape_errors,
     }
 
     for company in companies:
@@ -163,18 +194,8 @@ async def run_enrich(
                     "raw_data": rr.raw_data or {},
                 })
 
-        # --- Source A: Website scraping ---
-        website_data = {}
-        if company.website:
-            try:
-                website_data = await scrape_website(company.website)
-                if "error" not in website_data:
-                    stats["with_website_scrape"] += 1
-                else:
-                    logger.debug("Website scrape failed for %s: %s", company.name, website_data.get("error"))
-            except Exception as e:
-                logger.warning("Website scrape error for %s: %s", company.name, e)
-                stats["errors"] += 1
+        # --- Source A: Website scraping (from parallel results) ---
+        website_data = website_data_map.get(company.id, {})
 
         # --- Source B: Name-based industry inference ---
         infer_industry, infer_source = infer_industry_from_name(company.name)

@@ -2,7 +2,8 @@
 url: /backend/app/api/search.py
 About:
   Search API endpoints for ValLG. Handles search queries, creates pipeline
-  runs, orchestrates source adapters, and returns raw extracted records.
+  runs, orchestrates source adapters, and runs the full pipeline
+  (extract → clean → validate → enrich → score) in a single request.
   All endpoints require JWT authentication.
 """
 
@@ -14,6 +15,10 @@ from app.models.user import User
 from app.api.deps import get_current_user
 from app.schemas.search import SearchRequest, SearchResponse, PipelineRunResponse, RawRecordResponse
 from app.services.pipeline import run_extraction, get_pipeline_run, get_raw_records
+from app.services.level3 import run_clean
+from app.services.level4 import run_validate
+from app.services.level5 import run_enrich
+from app.services.level6 import run_score
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
@@ -28,8 +33,9 @@ async def search(
 ):
     """
     Execute a search query against all configured data sources.
-    Automatically searches all free sources. Results include every
-    record from every source with clear source attribution.
+    Automatically searches all free sources, then runs the full
+    pipeline (clean → validate → enrich → score) so results are
+    immediately available on the Results page.
     """
     sources = ALL_FREE_SOURCES
 
@@ -48,6 +54,17 @@ async def search(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+    # Chain Levels 3-6 so companies are available immediately
+    try:
+        await run_clean(db, current_user.organization_id)
+        await run_validate(db, current_user.organization_id)
+        await run_enrich(db, current_user.organization_id)
+        await run_score(db, current_user.organization_id)
+    except Exception as e:
+        # Enrichment/scoring failures should not fail the search
+        import logging
+        logging.getLogger(__name__).warning("Pipeline post-processing error: %s", e)
 
     raw_records = await get_raw_records(db, pipeline_run.id, current_user.organization_id)
 
