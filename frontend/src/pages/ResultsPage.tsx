@@ -224,8 +224,8 @@ export default function ResultsPage() {
 
       {/* Filters */}
       {leads.length > 0 && (
-        <div className="flex flex-wrap items-end gap-3 mb-4 p-3 bg-dark-800 border border-dark-600 rounded-lg">
-          <div className="flex-1 min-w-[120px]">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3 mb-4 p-3 bg-dark-800 border border-dark-600 rounded-lg">
+          <div className="flex-1 min-w-0 sm:min-w-[120px]">
             <label className="block text-xs font-medium text-dark-300 mb-1">Min Score</label>
             <input
               type="number"
@@ -237,7 +237,7 @@ export default function ResultsPage() {
               className="w-full px-3 py-1.5 text-sm bg-dark-700 border border-dark-500 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
           </div>
-          <div className="flex-1 min-w-[120px]">
+          <div className="flex-1 min-w-0 sm:min-w-[120px]">
             <label className="block text-xs font-medium text-dark-300 mb-1">Max Score</label>
             <input
               type="number"
@@ -249,7 +249,7 @@ export default function ResultsPage() {
               className="w-full px-3 py-1.5 text-sm bg-dark-700 border border-dark-500 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
           </div>
-          <div className="flex-1 min-w-[140px]">
+          <div className="flex-1 min-w-0 sm:min-w-[140px]">
             <label className="block text-xs font-medium text-dark-300 mb-1">Industry</label>
             <input
               type="text"
@@ -259,7 +259,7 @@ export default function ResultsPage() {
               className="w-full px-3 py-1.5 text-sm bg-dark-700 border border-dark-500 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
           </div>
-          <div className="flex-1 min-w-[120px]">
+          <div className="flex-1 min-w-0 sm:min-w-[120px]">
             <label className="block text-xs font-medium text-dark-300 mb-1">City</label>
             <input
               type="text"
@@ -269,7 +269,7 @@ export default function ResultsPage() {
               className="w-full px-3 py-1.5 text-sm bg-dark-700 border border-dark-500 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
           </div>
-          <div className="flex-1 min-w-[130px]">
+          <div className="flex-1 min-w-0 sm:min-w-[130px]">
             <label className="block text-xs font-medium text-dark-300 mb-1">Validation</label>
             <select
               value={filterValidation}
@@ -446,7 +446,7 @@ export default function ResultsPage() {
           </Card>
 
           {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4">
               <div className="text-sm text-dark-200">
                 Page <span className="font-medium text-dark-100">{page}</span> of <span className="font-medium text-dark-100">{totalPages}</span>
               </div>

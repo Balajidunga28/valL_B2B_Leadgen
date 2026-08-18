@@ -205,12 +205,12 @@ interface MetricCardProps {
 export function MetricCard({ label, value, icon, variant = 'default' }: MetricCardProps) {
   return (
     <Card className="animate-slide-up">
-      <CardContent className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-dark-200">{label}</p>
-          <p className="text-3xl font-bold text-white mt-1 tracking-tight">{value}</p>
+      <CardContent className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs sm:text-sm font-medium text-dark-200">{label}</p>
+          <p className="text-2xl sm:text-3xl font-bold text-white mt-1 tracking-tight">{value}</p>
         </div>
-        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${variant === 'brand' ? 'bg-brand-600/15 text-brand-400' : 'bg-dark-700 text-dark-200'}`}>
+        <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center shrink-0 ${variant === 'brand' ? 'bg-brand-600/15 text-brand-400' : 'bg-dark-700 text-dark-200'}`}>
           {icon}
         </div>
       </CardContent>
@@ -220,12 +220,12 @@ export function MetricCard({ label, value, icon, variant = 'default' }: MetricCa
 
 export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   return (
-    <div className="flex items-start justify-between mb-6 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight">{title}</h1>
+    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6 animate-fade-in">
+      <div className="min-w-0">
+        <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">{title}</h1>
         {description && <p className="text-sm text-dark-200 mt-1">{description}</p>}
       </div>
-      {actions && <div className="flex items-center gap-3">{actions}</div>}
+      {actions && <div className="flex items-center gap-2 sm:gap-3 flex-wrap shrink-0">{actions}</div>}
     </div>
   );
 }

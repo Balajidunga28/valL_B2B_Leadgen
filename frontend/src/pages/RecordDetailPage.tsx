@@ -100,12 +100,11 @@ export default function RecordDetailPage() {
           </svg>
           Back to Results
         </Link>
-        <div className="flex items-start justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">
-              {lead.name || 'Unnamed Lead'}
-            </h1>
-            <div className="flex items-center gap-3 mt-2">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+            {lead.name || 'Unnamed Lead'}
+          </h1>
+          <div className="flex items-center gap-2 sm:gap-3 mt-2 flex-wrap">
               {lead.source && <Badge variant="brand">{SOURCE_MAP[lead.source] || lead.source}</Badge>}
               {lead.validation_status && (
                 <Badge variant={lead.validation_status === 'VALID' ? 'success' : lead.validation_status === 'INVALID' ? 'error' : 'default'}>
@@ -118,7 +117,6 @@ export default function RecordDetailPage() {
                 </span>
               )}
             </div>
-          </div>
         </div>
       </div>
 

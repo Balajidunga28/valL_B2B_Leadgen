@@ -110,7 +110,7 @@ export default function DirectoriesPage() {
       {/* Directory status cards */}
       <div className="mb-6">
         <p className="text-xs font-semibold text-dark-300 uppercase tracking-wider mb-3">Directory Providers</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {DIRECTORY_SOURCES.map((src) => (
             <div
               key={src.id}
@@ -182,7 +182,7 @@ export default function DirectoriesPage() {
               }
             />
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
               <Input
                 label="City"
                 id="dir-city"

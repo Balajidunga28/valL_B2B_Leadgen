@@ -205,7 +205,7 @@ export default function MapsPage() {
 
       {/* Stats bar */}
       {!loading && stats.total > 0 && (
-        <div className="mb-4 flex gap-4 text-sm">
+        <div className="mb-4 flex flex-wrap gap-3 sm:gap-4 text-sm">
           <div className="flex items-center gap-2 text-dark-200">
             <div className="w-3 h-3 rounded-full bg-brand-500"></div>
             <span>{stats.withCoords} with coordinates</span>
@@ -222,7 +222,7 @@ export default function MapsPage() {
       {/* Map container */}
       {loading ? (
         <Card className="overflow-hidden">
-          <Skeleton className="h-[600px]" />
+          <Skeleton className="h-[350px] sm:h-[600px]" />
         </Card>
       ) : stats.withCoords === 0 ? (
         <Card>
@@ -245,7 +245,8 @@ export default function MapsPage() {
         <Card className="overflow-hidden">
           <div
             ref={mapRef}
-            style={{ height: '600px', width: '100%', background: '#0a0a12' }}
+            className="h-[350px] sm:h-[500px] md:h-[600px] w-full"
+            style={{ background: '#0a0a12' }}
           />
         </Card>
       )}

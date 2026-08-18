@@ -3,9 +3,11 @@
  * About:
  *   Main layout component for ValLG dark theme. Premium sidebar navigation
  *   with dark surfaces, active states with blue accent glow, user profile
- *   section, and responsive content area.
+ *   section, and responsive content area. Mobile: hamburger menu + slide-in
+ *   drawer. Desktop: permanent sidebar exactly as before.
  */
 
+import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
@@ -83,6 +85,22 @@ const navItems: Array<{
 export default function Layout() {
   const { user, loading, logout } = useAuth();
   const location = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const closeMobile = useCallback(() => setMobileOpen(false), []);
+
+  useEffect(() => {
+    closeMobile();
+  }, [location.pathname, closeMobile]);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [mobileOpen]);
 
   if (loading) {
     return (
@@ -101,10 +119,43 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen bg-dark-950">
-      {/* Sidebar */}
-      <aside className="w-[260px] bg-dark-900 border-r border-dark-600 flex flex-col">
-        {/* Logo */}
-        <div className="px-5 py-5 border-b border-dark-600">
+      {/* Mobile header */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-40 flex items-center gap-3 px-4 py-3 bg-dark-900/95 backdrop-blur border-b border-dark-600">
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="p-2 -ml-2 rounded-lg text-dark-200 hover:bg-dark-800 hover:text-dark-100 transition-colors"
+          aria-label="Open menu"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 9h16.5m-16.5 6.75h16.5" />
+          </svg>
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 bg-brand-600 rounded-md flex items-center justify-center shadow-[0_0_8px_rgba(99,102,241,0.3)]">
+            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+            </svg>
+          </div>
+          <span className="text-sm font-bold text-white tracking-tight">ValLG</span>
+        </div>
+      </div>
+
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm transition-opacity"
+          onClick={closeMobile}
+        />
+      )}
+
+      {/* Sidebar — hidden on mobile by default, shown as drawer when mobileOpen */}
+      <aside
+        className={`fixed lg:static inset-y-0 left-0 z-50 w-[260px] bg-dark-900 border-r border-dark-600 flex flex-col transform transition-transform duration-200 ease-out lg:translate-x-0 ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+        }`}
+      >
+        {/* Logo — desktop only (mobile has it in the header) */}
+        <div className="px-5 py-5 border-b border-dark-600 hidden lg:block">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center shadow-[0_0_12px_rgba(99,102,241,0.3)]">
               <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
@@ -118,14 +169,38 @@ export default function Layout() {
           </div>
         </div>
 
+        {/* Mobile drawer logo */}
+        <div className="px-5 py-4 border-b border-dark-600 lg:hidden">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+                </svg>
+              </div>
+              <span className="text-base font-bold text-white tracking-tight">ValLG</span>
+            </div>
+            <button
+              onClick={closeMobile}
+              className="p-2 -mr-2 rounded-lg text-dark-300 hover:bg-dark-800 hover:text-dark-100 transition-colors"
+              aria-label="Close menu"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path || (item.path !== '/dashboard' && location.pathname.startsWith(item.path));
             return (
               <div key={item.path} className="relative">
                 <Link
                   to={item.path}
+                  onClick={closeMobile}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
                     isActive
                       ? 'bg-brand-600/10 text-brand-300 shadow-[inset_0_0_0_1px_rgba(91,91,214,0.25)]'
@@ -143,7 +218,7 @@ export default function Layout() {
         {/* User Section */}
         <div className="p-3 border-t border-dark-600">
           <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-dark-800 transition-colors">
-            <div className="w-8 h-8 bg-brand-600/20 rounded-full flex items-center justify-center text-brand-400 text-xs font-bold">
+            <div className="w-8 h-8 bg-brand-600/20 rounded-full flex items-center justify-center text-brand-400 text-xs font-bold shrink-0">
               {user.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || 'U'}
             </div>
             <div className="flex-1 min-w-0">
@@ -151,8 +226,8 @@ export default function Layout() {
               <div className="text-xs text-dark-300 truncate">{user.email}</div>
             </div>
             <button
-              onClick={() => logout()}
-              className="text-dark-300 hover:text-dark-100 transition-colors p-1 rounded"
+              onClick={() => { closeMobile(); logout(); }}
+              className="text-dark-300 hover:text-dark-100 transition-colors p-1 rounded shrink-0"
               title="Sign out"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -164,8 +239,8 @@ export default function Layout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto">
-        <div className="p-8 max-w-7xl mx-auto">
+      <main className="flex-1 overflow-auto min-w-0">
+        <div className="p-4 pt-16 lg:p-8 lg:pt-8 max-w-7xl mx-auto">
           <Outlet />
         </div>
       </main>

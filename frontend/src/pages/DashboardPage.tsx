@@ -49,7 +49,7 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6">
         <Skeleton className="h-8 w-48" />
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
           <Skeleton className="h-28" />
           <Skeleton className="h-28" />
           <Skeleton className="h-28" />
@@ -86,7 +86,7 @@ export default function DashboardPage() {
       />
 
       {/* Metrics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 mb-6 sm:mb-8">
         <MetricCard
           label="Total Searches"
           value={data?.total_runs || 0}
@@ -119,8 +119,8 @@ export default function DashboardPage() {
 
       {/* Recent Activity */}
       <Card className="animate-slide-up">
-        <div className="px-6 py-4 border-b border-dark-600 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-white">Recent Searches</h2>
+        <div className="px-4 sm:px-6 py-4 border-b border-dark-600 flex items-center justify-between gap-2">
+          <h2 className="text-sm sm:text-base font-semibold text-white">Recent Searches</h2>
           {data?.recent_runs && data.recent_runs.length > 0 && (
             <Link to="/results" className="text-sm text-brand-400 hover:text-brand-300 font-medium">
               View all
@@ -130,8 +130,8 @@ export default function DashboardPage() {
         {data?.recent_runs && data.recent_runs.length > 0 ? (
           <div className="divide-y divide-dark-600">
             {data.recent_runs.map((run, i) => (
-              <div key={run.id} className="px-6 py-4 hover:bg-dark-700/50 transition-colors" style={{ animationDelay: `${i * 50}ms` }}>
-                <div className="flex items-center justify-between">
+              <div key={run.id} className="px-4 sm:px-6 py-4 hover:bg-dark-700/50 transition-colors" style={{ animationDelay: `${i * 50}ms` }}>
+                <div className="flex items-start sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-dark-700 border border-dark-600 flex items-center justify-center text-dark-200 shrink-0">
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -145,7 +145,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                     <Badge variant={run.status === 'completed' ? 'success' : run.status === 'running' ? 'warning' : 'default'}>
                       {run.status}
                     </Badge>

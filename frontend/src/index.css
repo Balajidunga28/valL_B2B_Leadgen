@@ -83,6 +83,7 @@
     font-family: var(--font-sans);
     background-color: var(--color-dark-950);
     color: #f0f0f8;
+    overflow-x: hidden;
   }
 
   ::selection {

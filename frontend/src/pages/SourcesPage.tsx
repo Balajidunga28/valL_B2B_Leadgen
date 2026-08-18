@@ -110,7 +110,7 @@ export default function SourcesPage() {
                   const statusInfo = STATUS_CONFIG[source.status] || STATUS_CONFIG.available;
                   return (
                     <Card key={source.adapter_name} className="animate-fade-in">
-                      <div className="px-5 py-4 flex items-center gap-4">
+                      <div className="px-4 sm:px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
                         {/* Status dot */}
                         <div className={`w-2.5 h-2.5 rounded-full ${statusInfo.dot} flex-shrink-0`} />
 
@@ -131,7 +131,7 @@ export default function SourcesPage() {
                         </div>
 
                         {/* Stats */}
-                        <div className="flex items-center gap-6 text-right flex-shrink-0">
+                        <div className="flex items-center gap-4 sm:gap-6 text-right sm:text-right flex-shrink-0 flex-wrap">
                           <div>
                             <div className="text-lg font-bold text-dark-100">{source.candidates_contributed}</div>
                             <div className="text-[10px] text-dark-400 uppercase">Candidates</div>
@@ -159,7 +159,7 @@ export default function SourcesPage() {
       )}
 
       {!loading && sources.length > 0 && (
-        <div className="mt-6 flex gap-3">
+        <div className="mt-6 flex flex-wrap gap-3">
           <Link
             to="/search"
             className="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 text-white text-sm font-medium rounded-lg hover:bg-brand-500 transition-colors"
