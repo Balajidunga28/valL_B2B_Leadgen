@@ -6,14 +6,28 @@ About:
   route handlers. Enforces tenant scoping via organization_id.
 """
 
+import ssl as ssl_mod
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
 
 
+def _prepare_async_url(url: str) -> str:
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    sslmode = qs.pop("sslmode", None)
+    new_query = urlencode(qs, doseq=True)
+    clean_url = urlunparse(parsed._replace(query=new_query))
+    if sslmode:
+        clean_url += "&ssl=require" if "?" in clean_url else "?ssl=require"
+    return clean_url
+
+
 engine = create_async_engine(
-    settings.DATABASE_URL_ASYNC,
+    _prepare_async_url(settings.DATABASE_URL_ASYNC),
     echo=settings.DEBUG,
     pool_pre_ping=True,
 )
