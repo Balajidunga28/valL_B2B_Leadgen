@@ -61,3 +61,21 @@ async def get_me(current_user: User = Depends(get_current_user)):
         role=current_user.role,
         organization_id=str(current_user.organization_id),
     )
+
+
+@router.post("/logout")
+async def logout():
+    """Logout endpoint. Client clears token locally."""
+    return {"detail": "Logged out"}
+
+
+@router.post("/signup", response_model=LoginResponse)
+async def signup(
+    request: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Register a new user."""
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Signup not available. Contact admin.",
+    )

@@ -1,1 +1,2 @@
-/api/*  https://vallg-api.onrender.com/api/*  200
+# Frontend uses VITE_API_URL (https://vallg-api.onrender.com/api) directly
+# No proxy needed - API calls go straight to backend
