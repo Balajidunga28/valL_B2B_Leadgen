@@ -131,7 +131,7 @@ export default function ResultsPage() {
     if (filterHasPhone !== null) params.set('has_phone', filterHasPhone!.toString());
     if (filterHasEmail !== null) params.set('has_email', filterHasEmail!.toString());
     if (filterValidation) params.set('validation_status', filterValidation);
-    return `/api/level7/export/csv?${params}`;
+    return `${import.meta.env.VITE_API_URL || '/api'}/level7/export/csv?${params}`;
   }
 
   function handleExport() {
