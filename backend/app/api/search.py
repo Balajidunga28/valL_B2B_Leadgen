@@ -62,9 +62,11 @@ async def search(
         await run_enrich(db, current_user.organization_id)
         await run_score(db, current_user.organization_id)
     except Exception as e:
-        # Enrichment/scoring failures should not fail the search
         import logging
         logging.getLogger(__name__).warning("Pipeline post-processing error: %s", e)
+        # Reset the session so subsequent queries don't fail
+        # with InFailedSQLTransactionError
+        await db.rollback()
 
     raw_records = await get_raw_records(db, pipeline_run.id, current_user.organization_id)
 
