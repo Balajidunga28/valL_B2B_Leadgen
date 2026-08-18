@@ -1,0 +1,18 @@
+{
+  "type": "web_service",
+  "name": "vallg-backend",
+  "ownerId": "tea-da210l1t0dsc73arsfdg",
+  "repo": "https://github.com/Balajidunga28/valL_B2B_Leadgen",
+  "branch": "main",
+  "rootDir": "backend",
+  "autoDeploy": "yes",
+  "serviceDetails": {
+    "env": "python",
+    "plan": "free",
+    "region": "oregon",
+    "envSpecificDetails": {
+      "buildCommand": "pip install -r requirements.txt",
+      "startCommand": "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    }
+  }
+}
