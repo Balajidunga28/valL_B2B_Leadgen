@@ -55,9 +55,11 @@ async def search(
             detail=str(e),
         )
 
-    # Chain Levels 3-6 so companies are available immediately
+    # Chain Levels 3-6 so companies are available immediately.
+    # Pass pipeline_run_id to run_clean so it only processes raw records
+    # from THIS search, not all historical records for the org.
     try:
-        await run_clean(db, current_user.organization_id)
+        await run_clean(db, current_user.organization_id, pipeline_run_id=run_id)
         await run_validate(db, current_user.organization_id)
         await run_enrich(db, current_user.organization_id)
         await run_score(db, current_user.organization_id)

@@ -331,6 +331,10 @@ async def run_extraction(
             raw_data = rec.get("raw_data", {})
             source_adapter = rec.get("_source_adapter", source_name)
 
+            # Filter out records that don't match the requested location
+            if not _validate_location(rec, city, state):
+                continue
+
             raw_data.setdefault("metadata", {})
             raw_data["metadata"]["extraction_method"] = source_adapter
             raw_data["metadata"]["contributing_sources"] = [source_adapter]

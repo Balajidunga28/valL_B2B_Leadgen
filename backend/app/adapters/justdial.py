@@ -27,12 +27,16 @@ USER_AGENTS = [
 
 
 def _parse_query(query: str, location: str | None) -> tuple[str, str]:
-    if location:
-        return query.strip(), location.strip()
     for pat in [r"^(.+?)\s+(?:in|near|around|at|of)\s+(.+)$", r"^(.+?)\s*[-]\s*(.+)$"]:
         m = re.match(pat, query, re.IGNORECASE)
         if m:
-            return m.group(1).strip(), m.group(2).strip()
+            cat = m.group(1).strip()
+            loc_from_query = m.group(2).strip()
+            if location:
+                return cat, location.strip()
+            return cat, loc_from_query
+    if location:
+        return query.strip(), location.strip()
     return query.strip(), ""
 
 
