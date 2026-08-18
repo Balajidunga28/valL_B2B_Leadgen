@@ -7,7 +7,7 @@ About:
 """
 
 import json
-from pydantic import field_validator
+import os
 from pydantic_settings import BaseSettings
 
 
@@ -29,27 +29,24 @@ class Settings(BaseSettings):
     # Google Places API
     GOOGLE_PLACES_API_KEY: str = ""
 
-    # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
-
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors(cls, v):
-        if isinstance(v, str):
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except (json.JSONDecodeError, ValueError):
-                pass
-            return [o.strip() for o in v.split(",") if o.strip()]
-        return v
-
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": True,
     }
+
+
+def get_cors_origins() -> list[str]:
+    raw = os.environ.get("CORS_ORIGINS", "")
+    if not raw:
+        return ["http://localhost:5173", "http://localhost:3000"]
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return parsed
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 settings = Settings()
