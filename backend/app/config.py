@@ -6,6 +6,8 @@ About:
   and external service settings. All secrets come from environment variables.
 """
 
+import json
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -29,6 +31,19 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors(cls, v):
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+            return [o.strip() for o in v.split(",") if o.strip()]
+        return v
 
     model_config = {
         "env_file": ".env",
