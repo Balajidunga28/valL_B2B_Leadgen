@@ -103,53 +103,75 @@ async def run_clean(
     # Count duplicates
     duplicates_identified = sum(len(c.duplicate_of) for c in clusters)
 
-    # --- Step 4: Clear previous Level 3 data for this org ---
-    # Delete existing companies (and clear FK on raw_records)
-    # First, null out company_id on all raw_records for this org
-    await db.execute(
-        RawRecord.__table__.update()
-        .where(RawRecord.organization_id == organization_id)
-        .where(RawRecord.company_id.isnot(None))
-        .values(company_id=None)
-    )
+    # --- Step 4: No longer delete all companies per search ---
+    # Each search adds new companies; entity resolution handles dedup.
+    # This preserves results across multiple searches for maximum lead discovery.
 
-    # Then delete the companies
-    await db.execute(
-        delete(Company).where(Company.organization_id == organization_id)
-    )
-    await db.flush()
-
-    # --- Step 5: Create Company records and link raw_records ---
+    # --- Step 5: Create or update Company records and link raw_records ---
     companies_created = 0
 
+    # Build lookup of existing companies by normalized name for dedup
+    existing_companies_result = await db.execute(
+        select(Company).where(Company.organization_id == organization_id)
+    )
+    existing_companies = {c.name.lower().strip(): c for c in existing_companies_result.scalars().all()}
+
     for cluster in clusters:
-        # Create Company record
-        company = Company(
-            id=uuid4(),
-            organization_id=organization_id,
-            name=cluster.best_name or "Unknown",
-            domain=_extract_domain(cluster.best_website),
-            industry=None,  # Level 5 enrichment
-            categories=None,
-            address=cluster.best_address,
-            city=cluster.best_city,
-            state=cluster.best_state,
-            country="India",
-            latitude=Decimal(str(cluster.latitude)) if cluster.latitude else None,
-            longitude=Decimal(str(cluster.longitude)) if cluster.longitude else None,
-            phone=cluster.best_phone,
-            phone_intl=cluster.best_phone,  # Already normalized to +91...
-            website=cluster.best_website,
-            rating=Decimal(str(cluster.rating)) if cluster.rating else None,
-            review_count=cluster.review_count,
-            business_status=None,
-            google_maps_url=None,
-            source_place_id=None,
-            source_cin=None,
-            completeness_score=Decimal(str(cluster.completeness_score)),
-        )
-        db.add(company)
-        companies_created += 1
+        company_name = (cluster.best_name or "Unknown").strip()
+        company_name_lower = company_name.lower()
+
+        # Check if company already exists (dedup by name)
+        existing = existing_companies.get(company_name_lower)
+        if existing:
+            company = existing
+            # Update fields if new data is better
+            if cluster.best_phone and not company.phone:
+                company.phone = cluster.best_phone
+                company.phone_intl = cluster.best_phone
+            if cluster.best_website and not company.website:
+                company.website = cluster.best_website
+            if cluster.best_address and not company.address:
+                company.address = cluster.best_address
+            if cluster.best_city and not company.city:
+                company.city = cluster.best_city
+            if cluster.best_state and not company.state:
+                company.state = cluster.best_state
+            if cluster.latitude and not company.latitude:
+                company.latitude = Decimal(str(cluster.latitude))
+            if cluster.longitude and not company.longitude:
+                company.longitude = Decimal(str(cluster.longitude))
+            if cluster.rating and not company.rating:
+                company.rating = Decimal(str(cluster.rating))
+            if cluster.review_count and not company.review_count:
+                company.review_count = cluster.review_count
+        else:
+            company = Company(
+                id=uuid4(),
+                organization_id=organization_id,
+                name=company_name,
+                domain=_extract_domain(cluster.best_website),
+                industry=None,
+                categories=None,
+                address=cluster.best_address,
+                city=cluster.best_city,
+                state=cluster.best_state,
+                country="India",
+                latitude=Decimal(str(cluster.latitude)) if cluster.latitude else None,
+                longitude=Decimal(str(cluster.longitude)) if cluster.longitude else None,
+                phone=cluster.best_phone,
+                phone_intl=cluster.best_phone,
+                website=cluster.best_website,
+                rating=Decimal(str(cluster.rating)) if cluster.rating else None,
+                review_count=cluster.review_count,
+                business_status=None,
+                google_maps_url=None,
+                source_place_id=None,
+                source_cin=None,
+                completeness_score=Decimal(str(cluster.completeness_score)),
+            )
+            db.add(company)
+            existing_companies[company_name_lower] = company
+            companies_created += 1
 
         # Link raw_records to this company
         for rr_id in cluster.raw_record_ids:

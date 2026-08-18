@@ -1,10 +1,9 @@
 """
 url: /backend/app/adapters/web_search.py
 About:
-  Playwright-based web search adapter that discovers business listings through
-  Bing search results. Searches for business directories and extracts business
-  names, phones, and addresses from search snippets and directory pages.
-  No API key required. Fully generic — no hardcoded city/category/query logic.
+  Bing search adapter with Playwright + httpx fallback. Searches Bing for
+  business directory listings. When Playwright is unavailable (Render free tier),
+  falls back to httpx HTML parsing. Fully generic — no hardcoded logic.
 """
 
 import asyncio
@@ -57,14 +56,11 @@ def _extract_phones(text: str) -> list[str]:
 
 
 def _extract_business_name_from_snippet(title: str, snippet: str) -> str | None:
-    """Try to extract a business name from search result title/snippet."""
     name = title.strip()
-
     prefixes = ["list of ", "top ", "best ", "directory of ", "find ", "all ", "explore "]
     for p in prefixes:
         if name.lower().startswith(p):
             return None
-
     skip_phrases = [
         "empanelled", "facilities in india", "across india", "interactive map",
         "contact details and", "world health organization", "who.int",
@@ -76,16 +72,12 @@ def _extract_business_name_from_snippet(title: str, snippet: str) -> str | None:
     for sp in skip_phrases:
         if sp in name.lower():
             return None
-
     for sw in GENERIC_SKIP_WORDS:
         if sw in name.lower():
             return None
-
     if len(name) < 3 or len(name) > 100:
         return None
-
     name = re.sub(r"\s*[-–|]\s*(?:India|list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
-
     return name if len(name) > 2 else None
 
 
@@ -101,40 +93,87 @@ class WebSearchAdapter(SourceAdapter):
         self.delay_max = delay_max
         self._playwright = None
         self._browser = None
+        self._has_playwright = False
 
     async def _ensure_browser(self):
-        if self._browser is not None:
+        if self._browser is not None or self._has_playwright:
             return
-        from playwright.async_api import async_playwright
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
+        try:
+            from playwright.async_api import async_playwright
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
+            self._has_playwright = True
+        except ImportError:
+            logger.info("Playwright not available, using httpx fallback for Web Search")
+            self._has_playwright = False
+        except Exception as e:
+            logger.warning("Playwright launch failed: %s, using httpx fallback", e)
+            self._has_playwright = False
 
     async def _rate_limit(self):
         await asyncio.sleep(random.uniform(self.delay_min, self.delay_max))
 
+    # --- httpx fallback: parse Bing search HTML ---
+    async def _search_bing_httpx(self, query: str, page_num: int = 0) -> list[dict[str, Any]]:
+        """Fallback: fetch Bing search via httpx and parse HTML."""
+        offset = page_num * 10
+        url = f"{BING_SEARCH_URL}?q={quote_plus(query)}&first={offset + 1}"
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        results = []
+        try:
+            resp = await self.client.get(url, headers=headers, follow_redirects=True, timeout=15.0)
+            if resp.status_code != 200:
+                logger.warning("Bing httpx returned %d for '%s'", resp.status_code, query)
+                return []
+            html = resp.text
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            # Bing search results are in <li class="b_algo"> elements
+            items = soup.select("li.b_algo")
+            for item in items:
+                title_el = item.select_one("h2 a")
+                snippet_el = item.select_one(".b_caption p, .b_algoSlug")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                link = title_el.get("href", "")
+                combined = f"{title} {snippet}"
+                phones = _extract_phones(combined)
+                name = _extract_business_name_from_snippet(title, snippet)
+                if name:
+                    results.append({
+                        "name": name,
+                        "phone": phones[0] if phones else None,
+                        "source_url": link,
+                        "snippet": snippet[:200],
+                    })
+        except Exception as e:
+            logger.error("Bing httpx error for '%s': %s", query, e)
+        return results
+
+    # --- Playwright path ---
     async def _search_bing(self, query: str, page_num: int = 0) -> list[dict[str, Any]]:
-        """Search Bing and extract business-relevant results."""
         user_agent = random.choice(USER_AGENTS)
         context = await self._browser.new_context(
-            user_agent=user_agent,
-            viewport={"width": 1920, "height": 1080},
-            locale="en-US",
+            user_agent=user_agent, viewport={"width": 1920, "height": 1080}, locale="en-US",
         )
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => false });")
-
         results = []
         page = None
-
         try:
             page = await context.new_page()
             offset = page_num * 10
             search_url = f"{BING_SEARCH_URL}?q={quote_plus(query)}&first={offset + 1}"
             await page.goto(search_url, wait_until="networkidle", timeout=20000)
             await page.wait_for_timeout(2000)
-
             raw_results = await page.evaluate("""() => {
                 const data = [];
                 const items = document.querySelectorAll('.b_algo');
@@ -151,16 +190,13 @@ class WebSearchAdapter(SourceAdapter):
                 });
                 return data;
             }""")
-
             for r in raw_results:
                 title = r.get("title", "")
                 snippet = r.get("snippet", "")
                 url = r.get("url", "")
                 combined = f"{title} {snippet}"
-
                 phones = _extract_phones(combined)
                 name = _extract_business_name_from_snippet(title, snippet)
-
                 if name:
                     results.append({
                         "name": name,
@@ -168,88 +204,18 @@ class WebSearchAdapter(SourceAdapter):
                         "source_url": url,
                         "snippet": snippet[:200],
                     })
-
         except Exception as e:
             logger.error(f"Bing search error: {e}")
         finally:
             if page:
                 await page.close()
             await context.close()
-
         return results
-
-    async def _scrape_directory_page(self, url: str, extracted_at: str) -> list[dict[str, Any]]:
-        """Attempt to scrape a directory/listing page for business data."""
-        user_agent = random.choice(USER_AGENTS)
-        context = await self._browser.new_context(
-            user_agent=user_agent,
-            viewport={"width": 1920, "height": 1080},
-            locale="en-US",
-        )
-
-        records = []
-        page = None
-
-        try:
-            page = await context.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            await page.wait_for_timeout(3000)
-
-            text_content = await page.inner_text("body")
-
-            phones = _extract_phones(text_content)
-
-            business_pattern = re.compile(
-                GENERIC_NAME_PATTERN,
-                re.MULTILINE
-            )
-
-            for match in business_pattern.finditer(text_content):
-                name = match.group(1).strip()
-                context_text = match.group(2).strip()
-
-                if len(name) < 5 or len(name) > 80:
-                    continue
-
-                ctx_phones = _extract_phones(context_text)
-                record = {
-                    "name": name,
-                    "phone": ctx_phones[0] if ctx_phones else None,
-                    "address": None,
-                    "website": None,
-                    "maps_url": None,
-                    "category": None,
-                    "latitude": None,
-                    "longitude": None,
-                    "rating": None,
-                    "reviews_count": None,
-                    "opening_hours": None,
-                    "source_url": url,
-                    "_provenance": {
-                        "search_query": url,
-                        "search_url": url,
-                        "extracted_at": extracted_at,
-                        "extraction_method": "web_search",
-                        "source_type": "directory_page",
-                    },
-                }
-                records.append(record)
-
-        except Exception as e:
-            logger.debug(f"Directory scrape error for {url}: {e}")
-        finally:
-            if page:
-                await page.close()
-            await context.close()
-
-        return records
 
     async def search(self, query: str, location: str | None = None, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         await self._ensure_browser()
-
         category, loc = _parse_query(query, location)
         extracted_at = datetime.now(timezone.utc).isoformat()
-
         search_terms = [
             f"{category} {loc} phone number address",
             f"{category} {loc} contact details",
@@ -257,49 +223,37 @@ class WebSearchAdapter(SourceAdapter):
             f"site:indiamart.com {category} {loc}",
             f"site:sulekha.com {category} {loc}",
         ]
-
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
-
         for st in search_terms:
-            search_results = await self._search_bing(st)
+            if self._has_playwright and self._browser:
+                search_results = await self._search_bing(st)
+            else:
+                search_results = await self._search_bing_httpx(st)
             await self._rate_limit()
-
             for sr in search_results:
                 name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
                 if name_key in seen_names or len(name_key) < 3:
                     continue
                 seen_names.add(name_key)
-
                 record = {
-                    "name": sr["name"],
-                    "phone": sr.get("phone"),
-                    "address": None,
-                    "website": None,
-                    "maps_url": None,
+                    "name": sr["name"], "phone": sr.get("phone"),
+                    "address": None, "website": None, "maps_url": None,
                     "category": category if category else None,
-                    "latitude": None,
-                    "longitude": None,
-                    "rating": None,
-                    "reviews_count": None,
-                    "opening_hours": None,
+                    "latitude": None, "longitude": None,
+                    "rating": None, "reviews_count": None, "opening_hours": None,
                     "source_url": sr.get("source_url"),
                     "_provenance": {
-                        "search_query": st,
-                        "search_url": sr.get("source_url", ""),
-                        "extracted_at": extracted_at,
-                        "extraction_method": "web_search",
+                        "search_query": st, "search_url": sr.get("source_url", ""),
+                        "extracted_at": extracted_at, "extraction_method": "web_search",
                         "source_type": "bing_results",
                     },
                 }
                 all_records.append(record)
-
                 if len(all_records) >= limit:
                     break
-
             if len(all_records) >= limit:
                 break
-
         logger.info(f"Web search total: {len(all_records)} unique from {len(search_terms)} queries")
         return all_records[:limit]
 
@@ -308,23 +262,16 @@ class WebSearchAdapter(SourceAdapter):
         name = raw_record.get("name") or ""
         source_url = raw_record.get("source_url") or ""
         source_id = hashlib.md5(f"{name}|{source_url}".encode()).hexdigest()[:16]
-
         return {
             "source_record_id": f"web_{source_id}",
             "raw_data": {
                 "name": raw_record.get("name"),
                 "address": raw_record.get("address"),
-                "city": None,
-                "state": None,
-                "pin_code": None,
-                "phone": raw_record.get("phone"),
-                "website": raw_record.get("website"),
-                "email": None,
-                "industry": raw_record.get("category"),
-                "latitude": raw_record.get("latitude"),
-                "longitude": raw_record.get("longitude"),
-                "rating": raw_record.get("rating"),
-                "reviews_count": raw_record.get("reviews_count"),
+                "city": None, "state": None, "pin_code": None,
+                "phone": raw_record.get("phone"), "website": raw_record.get("website"),
+                "email": None, "industry": raw_record.get("category"),
+                "latitude": raw_record.get("latitude"), "longitude": raw_record.get("longitude"),
+                "rating": raw_record.get("rating"), "reviews_count": raw_record.get("reviews_count"),
                 "opening_hours": raw_record.get("opening_hours"),
                 "maps_url": raw_record.get("maps_url"),
                 "source_url": raw_record.get("source_url"),
@@ -339,12 +286,8 @@ class WebSearchAdapter(SourceAdapter):
 
     async def health_check(self) -> bool:
         try:
-            from playwright.async_api import async_playwright
-            pw = await async_playwright().start()
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
-            await browser.close()
-            await pw.stop()
-            return True
+            resp = await self.client.get(BING_SEARCH_URL, timeout=10.0)
+            return resp.status_code == 200
         except Exception:
             return False
 

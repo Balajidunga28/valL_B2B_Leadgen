@@ -184,10 +184,25 @@ def _merge_records(records: list[dict]) -> dict:
 
 
 def _validate_location(record: dict, city: str | None, state: str | None) -> bool:
+    """Validate that a record matches the requested location.
+    
+    If the record has no location data (city/state/address/coords are all empty),
+    accept it anyway — the search was already location-scoped by the adapter.
+    Only reject records that have location data that clearly doesn't match.
+    """
     if not city and not state:
         return True
 
     raw = record.get("raw_data", {})
+    has_city_data = bool(raw.get("city"))
+    has_state_data = bool(raw.get("state"))
+    has_address = bool(raw.get("address"))
+    has_coords = bool(raw.get("latitude") and raw.get("longitude"))
+
+    # If record has no location data at all, accept it (adapter already scoped)
+    if not has_city_data and not has_state_data and not has_address and not has_coords:
+        return True
+
     text = " ".join([
         raw.get("address") or "",
         raw.get("city") or "",

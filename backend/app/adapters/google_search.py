@@ -1,12 +1,10 @@
 """
 url: /backend/app/adapters/google_search.py
 About:
-  Playwright-based Google Maps scraper for ValLG. Searches Google Maps for
-  businesses using multiple query variations and geographic scopes to maximize
-  coverage. Extracts listings from the feed panel (fast, no clicking).
-  Deduplicates across all queries. No API key required.
-  Fully generic — receives normalized search criteria and returns standardized
-  candidate records. No hardcoded city/category/query-specific logic.
+  Google Maps scraper for ValLG with Playwright + httpx fallback.
+  When Playwright is available, uses browser automation for full
+  interactive scraping. When unavailable (Render free tier), falls back
+  to httpx-based HTML parsing. Fully generic — no hardcoded city/category logic.
 """
 
 import asyncio
@@ -38,18 +36,14 @@ MAPS_URL = "https://www.google.com/maps"
 
 
 def _extract_location_from_address(address: str) -> tuple[str | None, str | None, str | None]:
-    """Extract city, state, pin_code from a Google Maps address string."""
     if not address:
         return None, None, None
-
     city = None
     state = None
     pin_code = None
-
     pm = re.search(r"\b(\d{6})\b", address)
     if pm:
         pin_code = pm.group(1)
-
     for s in ["Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
               "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
               "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram",
@@ -58,13 +52,11 @@ def _extract_location_from_address(address: str) -> tuple[str | None, str | None
         if s.lower() in address.lower():
             state = s
             break
-
     addr_parts = [p.strip() for p in address.split(",")]
     if len(addr_parts) >= 2:
         second = addr_parts[-2].strip()
         if re.match(r"^[A-Za-z\s]+$", second) and len(second) > 2 and not is_state_name(second):
             city = second
-
     if not city and addr_parts:
         for part in reversed(addr_parts):
             part_clean = part.strip()
@@ -72,11 +64,10 @@ def _extract_location_from_address(address: str) -> tuple[str | None, str | None
                 if not is_state_name(part_clean) and part_clean.lower() != "india":
                     city = part_clean
                     break
-
     return city, state, pin_code
 
+
 def _parse_query(query: str, location: str | None) -> tuple[str, str]:
-    # Always try to extract category and location from the query string first
     for pat in [r"^(.+?)\s+(?:in|near|around|at|of)\s+(.+)$", r"^(.+?)\s*[-]\s*(.+)$"]:
         m = re.match(pat, query, re.IGNORECASE)
         if m:
@@ -99,7 +90,7 @@ def _dedup_key(record: dict) -> str:
 
 
 class GoogleSearchAdapter(SourceAdapter):
-    """Scrapes Google Maps for business listings via Playwright."""
+    """Scrapes Google Maps for business listings via Playwright or httpx fallback."""
 
     name = "google_search"
     display_name = "Google Maps (Free)"
@@ -110,16 +101,25 @@ class GoogleSearchAdapter(SourceAdapter):
         self.delay_max = delay_max
         self._playwright = None
         self._browser = None
+        self._has_playwright = False
 
     async def _ensure_browser(self):
-        if self._browser is not None:
+        if self._browser is not None or self._has_playwright:
             return
-        from playwright.async_api import async_playwright
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
+        try:
+            from playwright.async_api import async_playwright
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            )
+            self._has_playwright = True
+        except ImportError:
+            logger.info("Playwright not available, using httpx fallback for Google Maps")
+            self._has_playwright = False
+        except Exception as e:
+            logger.warning("Playwright launch failed: %s, using httpx fallback", e)
+            self._has_playwright = False
 
     async def _rate_limit(self):
         await asyncio.sleep(random.uniform(self.delay_min, self.delay_max))
@@ -127,6 +127,64 @@ class GoogleSearchAdapter(SourceAdapter):
     def _build_maps_url(self, query: str) -> str:
         return f"{MAPS_URL}/search/{quote_plus(query)}"
 
+    # --- httpx fallback: parse Google Maps search HTML ---
+    async def _search_httpx(self, search_query: str, limit: int, extracted_at: str) -> list[dict[str, Any]]:
+        """Fallback: fetch Google Maps search page via httpx and parse results."""
+        url = self._build_maps_url(search_query)
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        records = []
+        try:
+            resp = await self.client.get(url, headers=headers, follow_redirects=True, timeout=20.0)
+            if resp.status_code != 200:
+                logger.warning("Google Maps httpx returned %d for '%s'", resp.status_code, search_query)
+                return []
+            html = resp.text
+            if "unusual traffic" in html.lower():
+                logger.warning("Google Maps blocked httpx request")
+                return []
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "html.parser")
+            # Google Maps embeds data in script tags
+            scripts = soup.find_all("script")
+            for script in scripts:
+                text = script.string or ""
+                # Look for business-like JSON data in embedded scripts
+                name_matches = re.findall(r'"([^"]{3,60})"', text)
+                for name in name_matches:
+                    if any(skip in name.lower() for skip in ["google", "maps", "javascript", "function", "var ", "const ", "return", "undefined"]):
+                        continue
+                    if re.match(r"^[A-Za-z0-9\s&'./-]+$", name) and len(name) > 4:
+                        records.append({
+                            "name": name.strip(),
+                            "address": None,
+                            "phone": None,
+                            "website": None,
+                            "rating": None,
+                            "reviews_count": None,
+                            "category": None,
+                            "opening_hours": None,
+                            "latitude": None,
+                            "longitude": None,
+                            "maps_url": url,
+                            "_provenance": {
+                                "search_query": search_query,
+                                "search_url": url,
+                                "extracted_at": extracted_at,
+                                "extraction_method": "google_maps_httpx",
+                                "user_agent": headers["User-Agent"],
+                            },
+                        })
+                    if len(records) >= limit:
+                        break
+        except Exception as e:
+            logger.error("Google Maps httpx error for '%s': %s", search_query, e)
+        return records[:limit]
+
+    # --- Playwright path (unchanged) ---
     async def _scroll_results_panel(self, page, max_scrolls: int = 25):
         selector = 'div[role="feed"]'
         panel = await page.query_selector(selector)
@@ -147,29 +205,24 @@ class GoogleSearchAdapter(SourceAdapter):
     async def _extract_listings(self, page) -> list[dict[str, Any]]:
         records = []
         feed_links = await page.query_selector_all('div[role="feed"] > div > div > a[href*="/maps/place"]')
-
         for link_el in feed_links:
             try:
                 href = await link_el.get_attribute("href") or ""
-
                 name_el = await link_el.query_selector('span')
                 name = (await name_el.inner_text()).strip() if name_el else None
                 if not name or len(name) < 2:
                     continue
-
                 parent_text = await link_el.evaluate("""el => {
                     const p = el.parentElement;
                     return p ? (p.innerText || '') : '';
                 }""")
                 lines = [l.strip() for l in parent_text.split("\n") if l.strip()]
-
                 rating = None
                 reviews_count = None
                 category = None
                 address = None
                 phone = None
                 hours = None
-
                 for ln in lines:
                     rm = re.match(r"^([\d.]+)$", ln)
                     if rm:
@@ -178,7 +231,6 @@ class GoogleSearchAdapter(SourceAdapter):
                         except ValueError:
                             pass
                         continue
-
                     if re.search(r"[·•⋅]", ln):
                         parts = re.split(r"\s*[·•⋅]\s*", ln)
                         parts = [p.strip() for p in parts if p.strip() and len(p.strip()) > 1]
@@ -196,10 +248,8 @@ class GoogleSearchAdapter(SourceAdapter):
                             if addr_parts:
                                 address = ", ".join(addr_parts)
                         continue
-
                     if not phone and re.match(r"^\+?[\d][\d\s\-()]{6,}$", ln):
                         phone = ln
-
                 rating_el = await link_el.evaluate_handle("el => el.parentElement")
                 if rating_el and rating is None:
                     try:
@@ -218,49 +268,35 @@ class GoogleSearchAdapter(SourceAdapter):
                                     rating = float(m2.group(1))
                     except Exception:
                         pass
-
                 if reviews_count is None:
                     for ln in lines:
                         m = re.match(r"^([\d,]+)\s*[Rr]eview", ln)
                         if m:
                             reviews_count = int(m.group(1).replace(",", ""))
                             break
-
                 name_clean = re.split(r"\s*[\|:\-]\s*", name)[0].strip()
                 if name_clean and len(name_clean) > 2:
                     name = name_clean
-
                 if address:
                     address = re.sub(r"^[^\w\d]+", "", address).strip()
                     if not address:
                         address = None
-
                 lat = None
                 lng = None
                 m = re.search(r"!3d([-\d.]+)!4d([-\d.]+)", href)
                 if m:
                     lat = float(m.group(1))
                     lng = float(m.group(2))
-
                 record = {
-                    "name": name,
-                    "address": address,
-                    "phone": phone,
-                    "website": None,
-                    "rating": rating,
-                    "reviews_count": reviews_count,
-                    "category": category,
-                    "opening_hours": hours,
-                    "latitude": lat,
-                    "longitude": lng,
+                    "name": name, "address": address, "phone": phone, "website": None,
+                    "rating": rating, "reviews_count": reviews_count, "category": category,
+                    "opening_hours": hours, "latitude": lat, "longitude": lng,
                     "maps_url": href if "maps/place" in href else None,
                 }
                 records.append(record)
-
             except Exception as e:
                 logger.debug(f"Error extracting listing: {e}")
                 continue
-
         return records
 
     async def _search_single_query(self, search_query: str, limit: int, extracted_at: str) -> list[dict[str, Any]]:
@@ -272,53 +308,40 @@ class GoogleSearchAdapter(SourceAdapter):
             timezone_id="Asia/Kolkata",
         )
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => false });")
-
         records = []
         page = None
-
         try:
             page = await context.new_page()
             search_url = self._build_maps_url(search_query)
             await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(4000)
-
             content = await page.content()
             if "unusual traffic" in content.lower():
                 logger.warning("Google Maps blocked the request")
                 return []
-
             await self._scroll_results_panel(page, max_scrolls=25)
             raw_records = await self._extract_listings(page)
-
             for rec in raw_records[:limit]:
                 rec["_provenance"] = {
-                    "search_query": search_query,
-                    "search_url": search_url,
-                    "extracted_at": extracted_at,
-                    "browser": "chromium",
-                    "extraction_method": "google_maps",
-                    "user_agent": user_agent,
+                    "search_query": search_query, "search_url": search_url,
+                    "extracted_at": extracted_at, "browser": "chromium",
+                    "extraction_method": "google_maps", "user_agent": user_agent,
                 }
                 records.append(rec)
-
         except Exception as e:
             logger.error(f"Google Maps search error for '{search_query}': {e}")
         finally:
             if page:
                 await page.close()
             await context.close()
-
         return records
 
     async def search(self, query: str, location: str | None = None, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         await self._ensure_browser()
-
         category, loc = _parse_query(query, location)
         extracted_at = datetime.now(timezone.utc).isoformat()
-
         variations = get_category_synonyms(category)
         scopes = build_location_scopes(loc) if loc else [""]
-
         search_queries = []
         for scope in scopes:
             for var in variations:
@@ -332,7 +355,10 @@ class GoogleSearchAdapter(SourceAdapter):
             remaining = limit - len(all_records)
             if remaining <= 0:
                 break
-            records = await self._search_single_query(sq, remaining + 10, extracted_at)
+            if self._has_playwright and self._browser:
+                records = await self._search_single_query(sq, remaining + 10, extracted_at)
+            else:
+                records = await self._search_httpx(sq, remaining + 10, extracted_at)
             for rec in records:
                 dk = _dedup_key(rec)
                 if dk not in seen_keys:
@@ -348,32 +374,23 @@ class GoogleSearchAdapter(SourceAdapter):
         provenance = raw_record.pop("_provenance", {})
         name = raw_record.get("name") or ""
         maps_url = raw_record.get("maps_url") or ""
-        address = raw_record.get("address") or ""
         source_id = hashlib.md5(f"{name}|{maps_url}".encode()).hexdigest()[:16]
-
+        address = raw_record.get("address") or ""
         city, state, pin_code = _extract_location_from_address(address)
-
         return {
             "source_record_id": f"gmaps_{source_id}",
             "raw_data": {
-                "name": raw_record.get("name"),
-                "address": address,
-                "city": city,
-                "state": state,
-                "pin_code": pin_code,
-                "phone": raw_record.get("phone"),
-                "website": raw_record.get("website"),
-                "email": None,
-                "industry": raw_record.get("category"),
-                "latitude": raw_record.get("latitude"),
-                "longitude": raw_record.get("longitude"),
-                "rating": raw_record.get("rating"),
-                "reviews_count": raw_record.get("reviews_count"),
+                "name": raw_record.get("name"), "address": address,
+                "city": city, "state": state, "pin_code": pin_code,
+                "phone": raw_record.get("phone"), "website": raw_record.get("website"),
+                "email": None, "industry": raw_record.get("category"),
+                "latitude": raw_record.get("latitude"), "longitude": raw_record.get("longitude"),
+                "rating": raw_record.get("rating"), "reviews_count": raw_record.get("reviews_count"),
                 "opening_hours": raw_record.get("opening_hours"),
                 "maps_url": raw_record.get("maps_url"),
                 "source_url": raw_record.get("maps_url") or provenance.get("search_url"),
                 "metadata": {
-                    "extraction_method": "google_maps",
+                    "extraction_method": provenance.get("extraction_method", "google_maps"),
                     "search_query": provenance.get("search_query"),
                     "extracted_at": provenance.get("extracted_at"),
                     "maps_url": raw_record.get("maps_url"),
@@ -383,14 +400,9 @@ class GoogleSearchAdapter(SourceAdapter):
 
     async def health_check(self) -> bool:
         try:
-            from playwright.async_api import async_playwright
-            pw = await async_playwright().start()
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
-            await browser.close()
-            await pw.stop()
-            return True
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            resp = await self.client.get("https://www.google.com/maps", timeout=10.0)
+            return resp.status_code == 200
+        except Exception:
             return False
 
     async def close(self):

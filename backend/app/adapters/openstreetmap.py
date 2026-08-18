@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
