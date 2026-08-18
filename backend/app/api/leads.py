@@ -70,6 +70,8 @@ async def list_leads(
                 .where(RawRecord.company_id.isnot(None))
                 .distinct()
             ).subquery()
+        except (ValueError, Exception):
+            pass
 
     query = (
         select(
