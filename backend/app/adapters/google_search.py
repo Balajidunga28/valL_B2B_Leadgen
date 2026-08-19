@@ -177,24 +177,13 @@ class GoogleSearchAdapter(SourceAdapter):
                     if query_loc:
                         link_lower = link.lower()
                         combined_lower = combined.lower()
-                        # If the result URL or combined text mentions a different well-known city, skip
-                        # But allow results that mention the requested location
-                        loc_found_in_result = query_loc in combined_lower or query_loc in link_lower
-                        # For very short location names (like "London"), also check the title
-                        if not loc_found_in_result and len(query_loc) > 3:
-                            # Check if result is about a different location
-                            other_cities = ["seattle", "new york", "los angeles", "chicago", "houston",
-                                           "phoenix", "san francisco", "boston", "miami", "dallas",
-                                           "london", "paris", "tokyo", "berlin", "sydney", "toronto"]
-                            title_lower = title.lower()
-                            snippet_lower = snippet.lower()
-                            for oc in other_cities:
-                                if oc != query_loc and (oc in title_lower or oc in snippet_lower):
-                                    # Result mentions a different city - skip
-                                    break
-                            else:
-                                # No other city found - might be relevant
-                                pass
+                        # Require the location to be present in the result
+                        # If user searched "restaurants in London", result must mention "london"
+                        if len(query_loc) >= 3:
+                            loc_found = query_loc in combined_lower or query_loc in link_lower
+                            if not loc_found:
+                                # Location not found in result at all - skip
+                                continue
 
                     phones = []
                     for pm in re.finditer(r"(?:\+91[\s\-]?)?(\d{5}[\s\-]?\d{5}|\d{4}[\s\-]?\d{3}[\s\-]?\d{3}|\d{10})", combined):
