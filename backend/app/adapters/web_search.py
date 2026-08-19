@@ -157,18 +157,16 @@ class WebSearchAdapter(SourceAdapter):
                 # Geographic validation: when location specified, reject results
                 # mentioning a completely different well-known city
                 if location and len(location) >= 3:
-                    loc_lower = location.lower()
-                    combined_lower = combined.lower()
-                    link_lower = link.lower()
-                    title_lower = title.lower()
+                    combined_text = f"{title} {snippet} {link}".lower()
                     other_cities = ["seattle", "new york", "los angeles", "chicago",
                                    "san francisco", "boston", "miami", "dallas",
                                    "paris", "tokyo", "berlin", "sydney"]
                     skip = False
                     for oc in other_cities:
-                        if oc != loc_lower and (oc in title_lower or oc in combined_lower):
-                            skip = True
-                            break
+                        if oc != location.lower():
+                            if re.search(r'\b' + re.escape(oc) + r'\b', combined_text):
+                                skip = True
+                                break
                     if skip:
                         continue
 

@@ -175,19 +175,16 @@ class GoogleSearchAdapter(SourceAdapter):
 
                     # Geographic validation: skip results clearly from wrong location
                     if query_loc:
-                        combined_lower = combined.lower()
-                        link_lower = link.lower()
-                        # Skip results that mention a completely different well-known city
-                        # but allow results that don't mention any specific city
+                        combined_text = f"{title} {snippet} {link}".lower()
+                        # Skip results that mention a well-known city OTHER than the requested one
                         other_cities = ["seattle", "new york", "los angeles", "chicago",
                                        "san francisco", "boston", "miami", "dallas",
                                        "paris", "tokyo", "berlin", "sydney"]
-                        title_lower = title.lower()
-                        snippet_lower = snippet.lower()
                         for oc in other_cities:
-                            if oc != query_loc and (oc in title_lower or oc in snippet_lower):
-                                # Result mentions a different city — skip
-                                break
+                            if oc != query_loc:
+                                # Use word boundary check to avoid "inseattle" false negatives
+                                if re.search(r'\b' + re.escape(oc) + r'\b', combined_text):
+                                    break
                         else:
                             pass  # No other city found — keep the result
 
