@@ -156,7 +156,7 @@ GENERIC_NAME_PATTERN: str = (
     r"([A-Z][A-Za-z\s&'.\-]{2,80})\s*[-–:,]\s*(.{10,200})"
 )
 
-LOCATION_MATCH_RADIUS_DEGREES: float = 0.25
+LOCATION_MATCH_RADIUS_DEGREES: float = 0.45
 ENTITY_MATCH_RADIUS_DEGREES: float = 0.0005
 
 

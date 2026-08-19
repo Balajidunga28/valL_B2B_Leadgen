@@ -154,12 +154,22 @@ class WebSearchAdapter(SourceAdapter):
                 link = title_el.get("href", "")
                 combined = f"{title} {snippet}"
 
-                # Geographic validation: when location specified, require it in results
+                # Geographic validation: when location specified, reject results
+                # mentioning a completely different well-known city
                 if location and len(location) >= 3:
                     loc_lower = location.lower()
                     combined_lower = combined.lower()
                     link_lower = link.lower()
-                    if loc_lower not in combined_lower and loc_lower not in link_lower:
+                    title_lower = title.lower()
+                    other_cities = ["seattle", "new york", "los angeles", "chicago",
+                                   "san francisco", "boston", "miami", "dallas",
+                                   "paris", "tokyo", "berlin", "sydney"]
+                    skip = False
+                    for oc in other_cities:
+                        if oc != loc_lower and (oc in title_lower or oc in combined_lower):
+                            skip = True
+                            break
+                    if skip:
                         continue
 
                 phones = _extract_phones(combined)

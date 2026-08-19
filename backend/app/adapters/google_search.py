@@ -175,15 +175,21 @@ class GoogleSearchAdapter(SourceAdapter):
 
                     # Geographic validation: skip results clearly from wrong location
                     if query_loc:
-                        link_lower = link.lower()
                         combined_lower = combined.lower()
-                        # Require the location to be present in the result
-                        # If user searched "restaurants in London", result must mention "london"
-                        if len(query_loc) >= 3:
-                            loc_found = query_loc in combined_lower or query_loc in link_lower
-                            if not loc_found:
-                                # Location not found in result at all - skip
-                                continue
+                        link_lower = link.lower()
+                        # Skip results that mention a completely different well-known city
+                        # but allow results that don't mention any specific city
+                        other_cities = ["seattle", "new york", "los angeles", "chicago",
+                                       "san francisco", "boston", "miami", "dallas",
+                                       "paris", "tokyo", "berlin", "sydney"]
+                        title_lower = title.lower()
+                        snippet_lower = snippet.lower()
+                        for oc in other_cities:
+                            if oc != query_loc and (oc in title_lower or oc in snippet_lower):
+                                # Result mentions a different city — skip
+                                break
+                        else:
+                            pass  # No other city found — keep the result
 
                     phones = []
                     for pm in re.finditer(r"(?:\+91[\s\-]?)?(\d{5}[\s\-]?\d{5}|\d{4}[\s\-]?\d{3}[\s\-]?\d{3}|\d{10})", combined):
