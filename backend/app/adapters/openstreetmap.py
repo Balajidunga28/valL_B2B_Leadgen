@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.openstreetmap.ru/api/interpreter",
 ]
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
@@ -258,7 +259,7 @@ class OpenStreetMapAdapter(SourceAdapter):
         )
 
         overpass_ql = f"""
-        [out:json][timeout:30];
+        [out:json][timeout:60];
         (
           node{tag_filters}(around:{radius},{lat},{lon});
           way{tag_filters}(around:{radius},{lat},{lon});
@@ -275,7 +276,7 @@ class OpenStreetMapAdapter(SourceAdapter):
                     mirror_url,
                     params={"data": overpass_ql},
                     headers={"User-Agent": "ValLG/1.0"},
-                    timeout=30.0,
+                    timeout=60.0,
                 )
                 resp.raise_for_status()
                 data = resp.json()
