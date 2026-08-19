@@ -126,12 +126,6 @@ export default function SearchPage() {
               />
             </div>
 
-            <div className="p-3 bg-dark-800 border border-dark-600 rounded-lg">
-              <p className="text-xs text-dark-300">
-                Searches all available sources automatically: Google Maps, OpenStreetMap, Web Search, IndiaMART, JustDial. Results include every record found with clear source attribution.
-              </p>
-            </div>
-
             <div className="pt-1">
               <Button
                 type="submit"
