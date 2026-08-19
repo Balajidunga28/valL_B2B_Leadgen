@@ -192,8 +192,9 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     3. Have coordinates within ~50km of the requested city center
     4. Have no city data but have a state match
     
-    Rejects records that have city data that clearly doesn't match
-    and isn't in the geographic vicinity.
+    Rejects records that:
+    - Have city data that clearly doesn't match and isn't in geographic vicinity
+    - Have no business data at all (no phone, no address, no city) — likely noise/web articles
     """
     if not city and not state:
         return True
@@ -203,10 +204,16 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     has_state_data = bool(raw.get("state"))
     has_address = bool(raw.get("address"))
     has_coords = bool(raw.get("latitude") and raw.get("longitude"))
+    has_phone = bool(raw.get("phone"))
 
-    # If record has no location data at all, accept it (adapter already scoped)
+    # If record has no location data and no useful business data, reject — likely noise
+    if not has_city_data and not has_state_data and not has_address and not has_coords and not has_phone:
+        return False
+
+    # If record has no location data but has a phone (actual business), accept
     if not has_city_data and not has_state_data and not has_address and not has_coords:
-        return True
+        if has_phone:
+            return True
 
     # Build comprehensive text for matching
     text = " ".join([
@@ -239,27 +246,13 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
             if coords:
                 clat, clng = coords
                 dist = ((lat - clat) ** 2 + (lng - clng) ** 2) ** 0.5
-                # 0.45 degrees ~ 50km
-                if dist < 0.45:
+                if dist < LOCATION_MATCH_RADIUS_DEGREES:
                     return True
-
-        # If record has no city data but has address, check address text
-        if has_address and not has_city_data:
-            if city_lower in (raw.get("address") or "").lower():
-                return True
 
         # Reject records with explicit city data that doesn't match
         if has_city_data:
             record_city = (raw.get("city") or "").lower().strip()
             if record_city and record_city != city_lower:
-                # But allow if record has coordinates near the requested city
-                if lat and lng:
-                    coords = get_coords_for_city(city_lower)
-                    if coords:
-                        clat, clng = coords
-                        dist = ((lat - clat) ** 2 + (lng - clng) ** 2) ** 0.5
-                        if dist < 0.45:
-                            return True
                 return False
 
         # For records without city data, accept if no evidence of wrong location

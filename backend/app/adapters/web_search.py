@@ -160,11 +160,15 @@ class WebSearchAdapter(SourceAdapter):
                     combined_text = f"{title} {snippet} {link}".lower()
                     other_cities = ["seattle", "new york", "los angeles", "chicago",
                                    "san francisco", "boston", "miami", "dallas",
-                                   "paris", "tokyo", "berlin", "sydney"]
+                                   "houston", "phoenix", "philadelphia", "denver",
+                                   "portland", "las vegas", "nashville", "atlanta",
+                                   "austin", "charlotte", "detroit", "minneapolis",
+                                   "paris", "tokyo", "berlin", "sydney",
+                                   "sierra vista", "tucson"]
                     skip = False
                     for oc in other_cities:
                         if oc != location.lower():
-                            if re.search(r'\b' + re.escape(oc) + r'\b', combined_text):
+                            if oc in combined_text:
                                 skip = True
                                 break
                     if skip:

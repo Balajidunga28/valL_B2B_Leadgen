@@ -179,11 +179,14 @@ class GoogleSearchAdapter(SourceAdapter):
                         # Skip results that mention a well-known city OTHER than the requested one
                         other_cities = ["seattle", "new york", "los angeles", "chicago",
                                        "san francisco", "boston", "miami", "dallas",
-                                       "paris", "tokyo", "berlin", "sydney"]
+                                       "houston", "phoenix", "philadelphia", "denver",
+                                       "portland", "las vegas", "nashville", "atlanta",
+                                       "austin", "charlotte", "detroit", "minneapolis",
+                                       "paris", "tokyo", "berlin", "sydney",
+                                       "sierra vista", "phoenix", "tucson"]
                         for oc in other_cities:
                             if oc != query_loc:
-                                # Use word boundary check to avoid "inseattle" false negatives
-                                if re.search(r'\b' + re.escape(oc) + r'\b', combined_text):
+                                if oc in combined_text:
                                     break
                         else:
                             pass  # No other city found — keep the result
