@@ -27,14 +27,14 @@ USER_AGENTS = [
 
 
 def _parse_query(query: str, location: str | None) -> tuple[str, str]:
+    """Parse query into (category, location). Location param overrides query location."""
     for pat in [r"^(.+?)\s+(?:in|near|around|at|of)\s+(.+)$", r"^(.+?)\s*[-]\s*(.+)$"]:
         m = re.match(pat, query, re.IGNORECASE)
         if m:
             cat = m.group(1).strip()
-            loc_from_query = m.group(2).strip()
             if location:
                 return cat, location.strip()
-            return cat, loc_from_query
+            return cat, m.group(2).strip()
     if location:
         return query.strip(), location.strip()
     return query.strip(), ""

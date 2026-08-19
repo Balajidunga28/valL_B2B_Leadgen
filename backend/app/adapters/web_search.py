@@ -29,10 +29,14 @@ BING_SEARCH_URL = "https://www.bing.com/search"
 
 
 def _parse_query(query: str, location: str | None) -> tuple[str, str]:
+    """Parse query into (category, location). Location param overrides query location."""
     for pat in [r"^(.+?)\s+(?:in|near|around|at|of)\s+(.+)$", r"^(.+?)\s*[-]\s*(.+)$"]:
         m = re.match(pat, query, re.IGNORECASE)
         if m:
-            return m.group(1).strip(), m.group(2).strip()
+            cat = m.group(1).strip()
+            if location:
+                return cat, location.strip()
+            return cat, m.group(2).strip()
     if location:
         return query.strip(), location.strip()
     return query.strip(), ""
@@ -216,15 +220,19 @@ class WebSearchAdapter(SourceAdapter):
         await self._ensure_browser()
         category, loc = _parse_query(query, location)
         extracted_at = datetime.now(timezone.utc).isoformat()
-        search_terms = [
-            f"{category} {loc} phone number address",
-            f"{category} {loc} contact details",
-            f"{category} {loc} business directory",
-            f"site:justdial.com {category} {loc}",
-            f"site:indiamart.com {category} {loc}",
-            f"site:sulekha.com {category} {loc}",
-            f"site:yellowpages.in {category} {loc}",
-        ]
+
+        # Build dynamic search terms based on user query
+        search_terms = []
+        if loc:
+            search_terms.append(f"{category} {loc} business phone address contact")
+            search_terms.append(f"{category} {loc} business directory listing")
+            # Use the raw user query directly
+            search_terms.append(query.strip())
+        else:
+            search_terms.append(f"{category} business phone address contact")
+            search_terms.append(f"{category} business directory listing")
+            search_terms.append(query.strip())
+
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
         for st in search_terms:

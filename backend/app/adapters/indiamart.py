@@ -30,10 +30,14 @@ INDIAMART_SEARCH_URL = "https://www.indiamart.com/proddetail"
 
 
 def _parse_query(query: str, location: str | None) -> tuple[str, str]:
+    """Parse query into (category, location). Location param overrides query location."""
     for pat in [r"^(.+?)\s+(?:in|near|around|at|of)\s+(.+)$", r"^(.+?)\s*[-]\s*(.+)$"]:
         m = re.match(pat, query, re.IGNORECASE)
         if m:
-            return m.group(1).strip(), m.group(2).strip()
+            cat = m.group(1).strip()
+            if location:
+                return cat, location.strip()
+            return cat, m.group(2).strip()
     if location:
         return query.strip(), location.strip()
     return query.strip(), ""
@@ -179,19 +183,35 @@ class IndiaMARTAdapter(SourceAdapter):
         category, loc = _parse_query(query, location)
         city = _extract_city_from_location(loc) if loc else ""
         extracted_at = datetime.now(timezone.utc).isoformat()
-        category_slug = re.sub(r"[^a-z0-9]+", "-", category.lower().strip()).strip("-")
+
+        # Generate category slugs - use original query text for better matching
+        category_slugs = []
+        # Primary: use the category from the parsed query
+        slug = re.sub(r"[^a-z0-9]+", "-", category.lower().strip()).strip("-")
+        if slug:
+            category_slugs.append(slug)
+
+        # Secondary: if category has multiple words, try the full category
+        if len(category.split()) > 1 and slug not in [category.lower().replace(" ", "-")]:
+            full_slug = re.sub(r"[^a-z0-9]+", "-", category.lower()).strip("-")
+            if full_slug and full_slug not in category_slugs:
+                category_slugs.append(full_slug)
+
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
-        if self._has_playwright and self._browser:
-            records = await self._search_category(category_slug, city, extracted_at)
-        else:
-            records = await self._search_category_httpx(category_slug, city, extracted_at)
-        for rec in records:
-            name_key = re.sub(r"[^a-z0-9]", "", (rec.get("name") or "").lower())
-            if name_key and name_key not in seen_names:
-                seen_names.add(name_key)
-                all_records.append(rec)
-        logger.info(f"IndiaMART total: {len(all_records)} unique for category '{category_slug}'")
+
+        for cat_slug in category_slugs[:2]:
+            if self._has_playwright and self._browser:
+                records = await self._search_category(cat_slug, city, extracted_at)
+            else:
+                records = await self._search_category_httpx(cat_slug, city, extracted_at)
+            for rec in records:
+                name_key = re.sub(r"[^a-z0-9]", "", (rec.get("name") or "").lower())
+                if name_key and name_key not in seen_names and len(name_key) > 2:
+                    seen_names.add(name_key)
+                    all_records.append(rec)
+
+        logger.info(f"IndiaMART total: {len(all_records)} unique for category '{category}'")
         return all_records[:limit]
 
     def normalize(self, raw_record: dict[str, Any]) -> dict[str, Any]:

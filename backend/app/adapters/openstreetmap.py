@@ -26,45 +26,115 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 # Map common search terms to OSM tag queries
 TAG_HINTS = {
     "restaurant": [("amenity", "restaurant")],
+    "restaurants": [("amenity", "restaurant")],
     "cafe": [("amenity", "cafe")],
     "coffee": [("amenity", "cafe")],
+    "coffee shop": [("amenity", "cafe")],
     "hotel": [("tourism", "hotel")],
+    "hotels": [("tourism", "hotel")],
     "pharmacy": [("amenity", "pharmacy")],
+    "pharmacies": [("amenity", "pharmacy")],
+    "drugstore": [("amenity", "pharmacy")],
     "hospital": [("amenity", "hospital")],
+    "hospitals": [("amenity", "hospital")],
     "clinic": [("amenity", "clinic")],
+    "clinics": [("amenity", "clinic")],
+    "dental": [("amenity", "dentist")],
+    "dentist": [("amenity", "dentist")],
+    "dentists": [("amenity", "dentist")],
+    "doctor": [("amenity", "doctor")],
+    "doctors": [("amenity", "doctor")],
     "gym": [("leisure", "fitness_centre")],
+    "gyms": [("leisure", "fitness_centre")],
     "fitness": [("leisure", "fitness_centre")],
+    "fitness centre": [("leisure", "fitness_centre")],
+    "fitness center": [("leisure", "fitness_centre")],
+    "health club": [("leisure", "fitness_centre")],
     "shop": [("shop", "~.")],
     "store": [("shop", "~.")],
+    "stores": [("shop", "~.")],
+    "shops": [("shop", "~.")],
     "bank": [("amenity", "bank")],
+    "banks": [("amenity", "bank")],
     "atm": [("amenity", "atm")],
+    "atms": [("amenity", "atm")],
     "school": [("amenity", "school")],
+    "schools": [("amenity", "school")],
     "college": [("amenity", "college")],
+    "colleges": [("amenity", "college")],
+    "university": [("amenity", "university")],
     "office": [("office", "~.")],
-    "IT": [("office", "IT")],
+    "offices": [("office", "~.")],
+    "it": [("office", "IT")],
+    "it company": [("office", "IT")],
+    "it companies": [("office", "IT")],
     "technology": [("office", "IT")],
+    "tech": [("office", "IT")],
     "software": [("office", "IT")],
+    "software company": [("office", "IT")],
+    "software companies": [("office", "IT")],
+    "startup": [("office", "IT")],
+    "startups": [("office", "IT")],
     "real estate": [("office", "estate_agent")],
+    "real estate agent": [("office", "estate_agent")],
     "legal": [("office", "lawyer")],
     "lawyer": [("office", "lawyer")],
+    "lawyers": [("office", "lawyer")],
+    "attorney": [("office", "lawyer")],
+    "advocate": [("office", "lawyer")],
     "accounting": [("office", "accountant")],
+    "accountant": [("office", "accountant")],
+    "ca": [("office", "accountant")],
     "spa": [("amenity", "spa")],
+    "spas": [("amenity", "spa")],
     "salon": [("shop", "beauty")],
+    "salons": [("shop", "beauty")],
     "beauty": [("shop", "beauty")],
+    "beauty salon": [("shop", "beauty")],
+    "beauty parlor": [("shop", "beauty")],
     "electronics": [("shop", "electronics")],
+    "electronic": [("shop", "electronics")],
     "grocery": [("shop", "supermarket")],
+    "grocery store": [("shop", "supermarket")],
     "supermarket": [("shop", "supermarket")],
+    "supermarkets": [("shop", "supermarket")],
     "pet": [("shop", "pet")],
+    "pet shop": [("shop", "pet")],
+    "pet store": [("shop", "pet")],
     "car": [("shop", "car")],
     "automobile": [("shop", "car")],
+    "vehicle": [("shop", "car")],
+    "auto": [("shop", "car")],
     "clothing": [("shop", "clothes")],
+    "clothes": [("shop", "clothes")],
     "fashion": [("shop", "clothes")],
-    "startup": [("office", "IT")],
+    "apparel": [("shop", "clothes")],
     "manufacturer": [("craft", "manufacture")],
+    "manufacturers": [("craft", "manufacture")],
     "factory": [("craft", "manufacture")],
-    "IT": [("office", "IT")],
-    "technology": [("office", "IT")],
-    "software": [("office", "IT")],
+    "factories": [("craft", "manufacture")],
+    "bakery": [("amenity", "bakery")],
+    "bar": [("amenity", "bar")],
+    "pub": [("amenity", "pub")],
+    "nightclub": [("amenity", "nightclub")],
+    "fuel": [("amenity", "fuel")],
+    "gas station": [("amenity", "fuel")],
+    "parking": [("amenity", "parking")],
+    "cinema": [("amenity", "cinema")],
+    "theatre": [("amenity", "theatre")],
+    "theater": [("amenity", "theatre")],
+    "library": [("amenity", "library")],
+    "community centre": [("amenity", "community_centre")],
+    "community center": [("amenity", "community_centre")],
+    "marketplace": [("amenity", "marketplace")],
+    "market": [("amenity", "marketplace")],
+    "courier": [("office", "courier")],
+    "logistics": [("office", "logistics")],
+    "travel": [("office", "travel_agent")],
+    "travel agency": [("office", "travel_agent")],
+    "insurance": [("office", "insurance")],
+    "consulting": [("office", "consulting")],
+    "consultancy": [("office", "consulting")],
 }
 
 
@@ -104,13 +174,34 @@ class OpenStreetMapAdapter(SourceAdapter):
         return lat, lon, radius
 
     def _build_tags(self, query: str) -> list[tuple[str, str]]:
-        """Determine OSM tags from the search query."""
+        """Determine OSM tags from the search query.
+        
+        Tries exact match first, then partial match, then falls back
+        to regex name search. Fully generic — handles any category.
+        """
         q_lower = query.lower().strip()
 
+        # Remove location words if present (e.g. "restaurants in London" -> "restaurants")
+        for sep in [" in ", " near ", " around ", " at ", " of "]:
+            if sep in q_lower:
+                q_lower = q_lower.split(sep, 1)[0].strip()
+                break
+
         # Check exact matches first
+        if q_lower in TAG_HINTS:
+            return TAG_HINTS[q_lower]
+
+        # Check if any TAG_HINTS key is contained in the query
         for key, tags in TAG_HINTS.items():
-            if key in q_lower:
+            if key in q_lower or q_lower in key:
                 return tags
+
+        # Try last word (e.g. "software companies" -> "companies")
+        words = q_lower.split()
+        if words:
+            last = words[-1]
+            if last in TAG_HINTS:
+                return TAG_HINTS[last]
 
         # Fallback: search by name with regex match on the query
         return [("name", f"(?i){re.escape(query)}")]

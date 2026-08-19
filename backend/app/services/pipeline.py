@@ -189,6 +189,9 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     If the record has no location data (city/state/address/coords are all empty),
     accept it anyway — the search was already location-scoped by the adapter.
     Only reject records that have location data that clearly doesn't match.
+    
+    For text-based matching, checks if the city/state name appears in any text field
+    (name, address, city, state, source_url, etc.).
     """
     if not city and not state:
         return True
@@ -203,11 +206,15 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     if not has_city_data and not has_state_data and not has_address and not has_coords:
         return True
 
+    # Build comprehensive text for matching
     text = " ".join([
         raw.get("address") or "",
         raw.get("city") or "",
         raw.get("state") or "",
         raw.get("name") or "",
+        raw.get("source_url") or "",
+        raw.get("maps_url") or "",
+        str(raw.get("metadata", {})),
     ]).lower()
 
     lat = raw.get("latitude")
@@ -217,12 +224,14 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     state_lower = (state or "").lower().strip()
 
     if city_lower:
+        # Text-based match
         if city_lower in text:
             return True
 
         if state_lower and state_lower in text:
             return True
 
+        # Coordinate-based match
         if lat and lng:
             coords = get_coords_for_city(city_lower)
             if coords:
@@ -230,6 +239,10 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
                 dist = ((lat - clat) ** 2 + (lng - clng) ** 2) ** 0.5
                 if dist < LOCATION_MATCH_RADIUS_DEGREES:
                     return True
+
+        # If record has city data that doesn't match, reject
+        if has_city_data and raw.get("city", "").lower().strip() != city_lower:
+            return False
 
         return False
 

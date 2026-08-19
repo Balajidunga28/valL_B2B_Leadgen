@@ -86,17 +86,54 @@ CITY_DISTRICTS: dict[str, str] = {
 }
 
 CATEGORY_SYNONYMS: dict[str, list[str]] = {
-    "hospitals": ["hospitals", "medical centers"],
-    "hospital": ["hospital", "medical center", "hospitals"],
-    "restaurants": ["restaurants", "food courts"],
-    "schools": ["schools", "colleges"],
-    "shops": ["shops", "stores"],
-    "hotels": ["hotels", "lodges"],
-    "pharmacies": ["pharmacies", "medical stores"],
-    "clinics": ["clinics", "polyclinics"],
-    "startups": ["startups", "tech companies"],
+    "hospitals": ["hospitals", "medical centers", "healthcare"],
+    "hospital": ["hospital", "medical center", "hospitals", "healthcare"],
+    "restaurants": ["restaurants", "food", "dining"],
+    "restaurant": ["restaurant", "restaurants", "food", "dining"],
+    "schools": ["schools", "education"],
+    "school": ["school", "schools", "education"],
+    "shops": ["shops", "stores", "retail"],
+    "shop": ["shop", "shops", "stores", "retail"],
+    "hotels": ["hotels", "accommodation", "lodging"],
+    "hotel": ["hotel", "hotels", "accommodation", "lodging"],
+    "pharmacies": ["pharmacies", "pharmacy", "drugstore"],
+    "pharmacy": ["pharmacy", "pharmacies", "drugstore"],
+    "clinics": ["clinics", "clinic", "medical"],
+    "clinic": ["clinic", "clinics", "medical"],
+    "startups": ["startups", "startup", "tech companies"],
+    "startup": ["startup", "startups", "tech companies"],
     "it companies": ["IT companies", "software companies", "technology firms"],
-    "manufacturers": ["manufacturers", "factories", "industrial units"],
+    "software companies": ["software companies", "IT companies", "technology firms", "software"],
+    "manufacturers": ["manufacturers", "factories", "industrial"],
+    "manufacturer": ["manufacturer", "manufacturers", "factories"],
+    "dentists": ["dentists", "dental", "dental clinic", "dental care"],
+    "dentist": ["dentist", "dentists", "dental", "dental clinic"],
+    "dental": ["dental", "dentist", "dentists", "dental clinic"],
+    "gym": ["gym", "fitness", "fitness centre", "fitness center", "health club"],
+    "gyms": ["gyms", "fitness", "fitness centres", "fitness centers"],
+    "fitness": ["fitness", "gym", "fitness centre", "fitness center"],
+    "banks": ["banks", "bank", "financial"],
+    "bank": ["bank", "banks", "financial"],
+    "atm": ["ATM", "atm", "cash machine"],
+    "salons": ["salons", "salon", "beauty parlor", "beauty salon"],
+    "salon": ["salon", "salons", "beauty parlor", "beauty salon"],
+    "beauty": ["beauty", "beauty salon", "beauty parlor", "spa"],
+    "spa": ["spa", "spas", "wellness", "beauty"],
+    "supermarkets": ["supermarkets", "supermarket", "grocery", "grocery store"],
+    "supermarket": ["supermarket", "supermarkets", "grocery", "grocery store"],
+    "grocery": ["grocery", "grocery store", "supermarket"],
+    "car": ["car", "automobile", "vehicle", "auto"],
+    "automobile": ["automobile", "car", "vehicle", "auto"],
+    "clothing": ["clothing", "clothes", "fashion", "apparel"],
+    "fashion": ["fashion", "clothing", "clothes", "apparel"],
+    "electronics": ["electronics", "electronic", "gadget"],
+    "pet": ["pet", "pets", "pet shop", "pet store", "animal"],
+    "lawyer": ["lawyer", "lawyers", "attorney", "legal", "advocate"],
+    "legal": ["legal", "lawyer", "lawyers", "attorney", "advocate"],
+    "accounting": ["accounting", "accountant", "CA", "chartered accountant"],
+    "real estate": ["real estate", "property", "realty"],
+    "schools": ["schools", "education", "learning"],
+    "colleges": ["colleges", "college", "education", "university"],
 }
 
 GENERIC_BUSINESS_SUFFIXES: list[str] = [
@@ -139,37 +176,61 @@ def is_state_name(text: str) -> bool:
 
 
 def get_category_synonyms(category: str) -> list[str]:
-    """Get query variations for a category. Falls back to [category] if no match."""
+    """Get query variations for a category. Falls back to [category] if no match.
+    
+    For multi-word queries like 'software companies', generates useful
+    variations. For single words like 'dentists', looks up synonyms.
+    Always returns the original category first.
+    """
     cat_lower = category.lower().strip()
+    if not cat_lower:
+        return [category]
+
+    # Exact match in synonym map
+    if cat_lower in CATEGORY_SYNONYMS:
+        return CATEGORY_SYNONYMS[cat_lower]
+
+    # Partial match - check if any key is contained in the query
     for key, synonyms in CATEGORY_SYNONYMS.items():
         if key in cat_lower or cat_lower in key:
             return synonyms
+
+    # Multi-word: try matching the last word (e.g. "software companies" -> "companies")
+    words = cat_lower.split()
+    if len(words) > 1:
+        last_word = words[-1]
+        if last_word in CATEGORY_SYNONYMS:
+            base_synonyms = CATEGORY_SYNONYMS[last_word]
+            return [category] + [f"{words[0]} {s}" for s in base_synonyms if s != last_word]
+
     return [category]
 
 
 def build_location_scopes(location: str) -> list[str]:
-    """Generate broader geographic scopes from a location string.
-    'Eluru, Andhra Pradesh' -> ['Eluru', 'Eluru Andhra Pradesh', 'West Godavari district']
+    """Generate geographic scopes from a location string.
+    
+    Always includes the raw user-provided location as the primary scope.
+    Does NOT substitute nearby or different cities.
+    'London' -> ['London']
+    'Eluru, Andhra Pradesh' -> ['Eluru', 'Eluru Andhra Pradesh', 'Eluru Andhra Pradesh India']
+    'Toronto' -> ['Toronto', 'Toronto Canada']
     """
-    parts = [p.strip() for p in location.split(",")]
-    city = parts[0] if parts else location
+    if not location or not location.strip():
+        return [""]
+
+    raw = location.strip()
+    parts = [p.strip() for p in raw.split(",")]
+    city = parts[0]
     state = parts[1].strip() if len(parts) > 1 else ""
 
-    scopes: list[str] = [city]
+    scopes: list[str] = [raw]
+
+    if city != raw:
+        scopes.append(city)
+
     if state:
-        scopes.append(f"{city} {state}")
-
-    city_lower = city.lower()
-    district = CITY_DISTRICTS.get(city_lower)
-    if district:
-        if district not in scopes:
-            scopes.append(district)
-    else:
-        guessed = f"{city} district"
-        if guessed not in scopes:
-            scopes.append(guessed)
-
-    if state and len(scopes) < 3:
-        scopes.append(f"{city} {state} India")
+        combo = f"{city} {state}"
+        if combo not in scopes:
+            scopes.append(combo)
 
     return scopes[:3]
