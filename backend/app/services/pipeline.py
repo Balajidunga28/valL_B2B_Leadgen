@@ -49,6 +49,24 @@ ADAPTERS = {
 FREE_SOURCES = {"openstreetmap", "google_search", "web_search", "indiamart", "justdial"}
 
 
+def _extract_location_from_query(query: str) -> str | None:
+    """Try to extract a location from the query text if no explicit location provided.
+    
+    Handles patterns like:
+      - "restaurants in London"
+      - "hospitals near Hyderabad"
+      - "IT companies Bangalore"
+    """
+    q = query.strip()
+    for prep in [" in ", " near ", " at ", " around ", " from "]:
+        idx = q.lower().find(prep)
+        if idx != -1:
+            loc = q[idx + len(prep):].strip()
+            if loc:
+                return loc
+    return None
+
+
 async def get_adapter(db: AsyncSession, organization_id, source_name: str):
     if source_name not in ADAPTERS:
         raise ValueError(f"Unknown source: {source_name}")
@@ -333,8 +351,16 @@ async def run_extraction(
 
     extraction_limit = max(limit, 200)
 
+    # If no explicit location, try to extract from query text
+    effective_location = location
+    if not effective_location:
+        parsed_loc = _extract_location_from_query(query)
+        if parsed_loc:
+            effective_location = parsed_loc
+            logger.info(f"Parsed location '{effective_location}' from query: {query}")
+
     tasks = [
-        _extract_from_source(name, adapters[name], query, location, extraction_limit)
+        _extract_from_source(name, adapters[name], query, effective_location, extraction_limit)
         for name in adapters
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -359,8 +385,8 @@ async def run_extraction(
 
     city = None
     state = None
-    if location:
-        parts = [p.strip() for p in location.split(",")]
+    if effective_location:
+        parts = [p.strip() for p in effective_location.split(",")]
         city = parts[0] if parts else None
         state = parts[1].strip() if len(parts) > 1 else None
 
