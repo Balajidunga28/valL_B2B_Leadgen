@@ -73,16 +73,19 @@ class GooglePlacesAdapter(SourceAdapter):
             import re
             city_lower = location.split(",")[0].strip().lower()
             coords = CITY_COORDS.get(city_lower)
-            lat, lng = coords if coords else (20.0, 78.0)
-            body["locationBias"] = {
-                "circle": {
-                    "center": {
-                        "latitude": lat,
-                        "longitude": lng,
-                    },
-                    "radius": 50000.0,
+            if not coords:
+                logger.warning(f"No coordinates for '{location}', skipping location bias")
+            else:
+                lat, lng = coords
+                body["locationBias"] = {
+                    "circle": {
+                        "center": {
+                            "latitude": lat,
+                            "longitude": lng,
+                        },
+                        "radius": 50000.0,
+                    }
                 }
-            }
 
         # Fields to request (minimize cost)
         fields = [

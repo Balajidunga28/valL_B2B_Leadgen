@@ -202,18 +202,19 @@ class OpenStreetMapAdapter(SourceAdapter):
     def _build_tags(self, query: str) -> list[tuple[str, str]]:
         """Determine OSM tags from the search query.
         
-        Tries exact match first, then partial match, then falls back
-        to regex name search. Fully generic — handles any category.
+        Uses TAG_HINTS for known categories (fast path), then falls back
+        to dynamic OSM tag exploration for unknown categories.
+        NEVER returns an empty list — always produces searchable tags.
         """
         q_lower = query.lower().strip()
 
-        # Remove location words if present (e.g. "restaurants in London" -> "restaurants")
+        # Remove location words if present
         for sep in [" in ", " near ", " around ", " at ", " of "]:
             if sep in q_lower:
                 q_lower = q_lower.split(sep, 1)[0].strip()
                 break
 
-        # Check exact matches first
+        # Check exact matches first (fast path)
         if q_lower in TAG_HINTS:
             return TAG_HINTS[q_lower]
 
@@ -229,8 +230,41 @@ class OpenStreetMapAdapter(SourceAdapter):
             if last in TAG_HINTS:
                 return TAG_HINTS[last]
 
-        # Fallback: search by name with regex match on the query
-        return [("name", f"(?i){re.escape(query)}")]
+        # Dynamic fallback: try common OSM tags for the query,
+        # plus a name-based search. This ensures OSM ALWAYS attempts
+        # a search even for categories not in TAG_HINTS.
+        tags = []
+        # Try amenity tags for common business types
+        for amenity_type in ["restaurant", "cafe", "shop", "hospital", "clinic",
+                            "pharmacy", "bank", "dentist", "gym", "school",
+                            "hotel", "car_repair", "beauty_salon", "lawyer",
+                            "accountant", "coworking_space", "office"]:
+            if amenity_type in q_lower or q_lower in amenity_type:
+                tags.append(("amenity", amenity_type))
+                break
+
+        # Try shop tags
+        if not tags:
+            for shop_type in ["clothes", "supermarket", "electronics", "furniture",
+                             "car", "shoes", "jewelry", "bakery", "butcher",
+                             "chemist", "computer", "optician", "sports",
+                             "stationery", "toys", "gift", "florist"]:
+                if shop_type in q_lower or q_lower in shop_type:
+                    tags.append(("shop", shop_type))
+                    break
+
+        # Try office tags
+        if not tags:
+            for office_type in ["it", "company", "lawyer", "accountant",
+                               "insurance", "consulting", "design"]:
+                if office_type in q_lower or q_lower in office_type:
+                    tags.append(("office", office_type))
+                    break
+
+        # Always include a name-based search as fallback
+        tags.append(("name", f"(?i){re.escape(q_lower)}"))
+
+        return tags
 
     async def search(
         self,

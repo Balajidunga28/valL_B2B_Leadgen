@@ -2,12 +2,13 @@
 url: /backend/app/geo.py
 About:
   Single source of truth for all geographic and category configuration.
-  Replaces hardcoded city_coords, city_districts, INDIAN_STATES, and
-  CATEGORY_SYNONYMS scattered across adapter files. All adapters import
-  from this module instead of maintaining their own copies.
+  Contains city coordinates for fast lookup, category relevance validation,
+  and utility functions. OSM tags/CATEGORY_SYNONYMS are NOT gatekeepers —
+  the user's natural-language query is the source of truth.
 """
 
 from typing import Any
+import re
 
 INDIAN_STATES: list[str] = [
     "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
@@ -31,12 +32,14 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
     "delhi": (28.6139, 77.2090),
     "vijayawada": (16.5062, 80.6480),
     "visakhapatnam": (17.6868, 83.2185),
+    "vizag": (17.6868, 83.2185),
     "guntur": (16.3067, 80.4365),
     "tirupati": (13.6288, 79.4192),
     "warangal": (17.9784, 79.5941),
     "nellore": (14.4426, 79.9865),
     "kurnool": (15.8281, 78.0373),
     "rajamahendravaram": (17.0005, 81.8040),
+    "rajahmundry": (17.0005, 81.8040),
     "kakinada": (16.9891, 82.2475),
     "bhimavaram": (16.5449, 81.5212),
     "narsapur": (16.4360, 81.6690),
@@ -59,6 +62,18 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
     "melbourne": (-37.8136, 144.9631),
     "singapore": (1.3521, 103.8198),
     "dubai": (25.2048, 55.2708),
+    "mexico city": (19.4326, -99.1332),
+    "mexico": (19.4326, -99.1332),
+    "sao paulo": (-23.5505, -46.6333),
+    "cairo": (30.0444, 31.2357),
+    "lagos": (6.5244, 3.3792),
+    "nairobi": (-1.2921, 36.8219),
+    "cape town": (-33.9249, 18.4241),
+    "bangkok": (13.7563, 100.5018),
+    "hong kong": (22.3193, 114.1694),
+    "shanghai": (31.2304, 121.4737),
+    "beijing": (39.9042, 116.4074),
+    "mumbai": (19.0760, 72.8777),
     "kolkata": (22.5726, 88.3639),
     "ahmedabad": (23.0225, 72.5714),
     "jaipur": (26.9124, 75.7873),
@@ -75,102 +90,6 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
     "agra": (27.1767, 78.0081),
     "kanpur": (26.4499, 80.3319),
     "nashik": (19.9975, 73.7898),
-    "rajahmundry": (17.0005, 81.8040),
-    "vishakhapatnam": (17.6868, 83.2185),
-    "tirupati": (13.6288, 79.4192),
-}
-
-CITY_DISTRICTS: dict[str, str] = {
-    "eluru": "West Godavari district",
-    "hyderabad": "Hyderabad district",
-    "bangalore": "Bangalore Urban district",
-    "bengaluru": "Bangalore Urban district",
-    "chennai": "Chennai district",
-    "mumbai": "Mumbai district",
-    "delhi": "New Delhi",
-    "pune": "Pune district",
-    "vijayawada": "Krishna district",
-    "visakhapatnam": "Visakhapatnam district",
-    "guntur": "Guntur district",
-    "tirupati": "Chittoor district",
-    "warangal": "Warangal district",
-    "nellore": "Nellore district",
-    "kurnool": "Kurnool district",
-    "rajamahendravaram": "East Godavari district",
-    "kakinada": "East Godavari district",
-    "bhimavaram": "West Godavari district",
-    "narsapur": "West Godavari district",
-    "tadepalligudem": "West Godavari district",
-    "jaggayyapeta": "Krishna district",
-    "mangalagiri": "Guntur district",
-    "tiruvananthapuram": "Thiruvananthapuram district",
-    "kozhikode": "Kozhikode district",
-    "thrissur": "Thrissur district",
-    "coimbatore": "Coimbatore district",
-    "madurai": "Madurai district",
-    "jaipur": "Jaipur district",
-    "lucknow": "Lucknow district",
-    "kanpur": "Kanpur district",
-    "nagpur": "Nagpur district",
-    "ahmedabad": "Ahmedabad district",
-    "surat": "Surat district",
-    "indore": "Indore district",
-    "bhopal": "Bhopal district",
-    "patna": "Patna district",
-    "kolkata": "Kolkata district",
-    "agra": "Agra district",
-    "varanasi": "Varanasi district",
-}
-
-CATEGORY_SYNONYMS: dict[str, list[str]] = {
-    "hospitals": ["hospitals", "medical centers", "healthcare"],
-    "hospital": ["hospital", "medical center", "hospitals", "healthcare"],
-    "restaurants": ["restaurants", "food", "dining"],
-    "restaurant": ["restaurant", "restaurants", "food", "dining"],
-    "schools": ["schools", "education"],
-    "school": ["school", "schools", "education"],
-    "shops": ["shops", "stores", "retail"],
-    "shop": ["shop", "shops", "stores", "retail"],
-    "hotels": ["hotels", "accommodation", "lodging"],
-    "hotel": ["hotel", "hotels", "accommodation", "lodging"],
-    "pharmacies": ["pharmacies", "pharmacy", "drugstore"],
-    "pharmacy": ["pharmacy", "pharmacies", "drugstore"],
-    "clinics": ["clinics", "clinic", "medical"],
-    "clinic": ["clinic", "clinics", "medical"],
-    "startups": ["startups", "startup", "tech companies"],
-    "startup": ["startup", "startups", "tech companies"],
-    "it companies": ["IT companies", "software companies", "technology firms"],
-    "software companies": ["software companies", "IT companies", "technology firms", "software"],
-    "manufacturers": ["manufacturers", "factories", "industrial"],
-    "manufacturer": ["manufacturer", "manufacturers", "factories"],
-    "dentists": ["dentists", "dental", "dental clinic", "dental care"],
-    "dentist": ["dentist", "dentists", "dental", "dental clinic"],
-    "dental": ["dental", "dentist", "dentists", "dental clinic"],
-    "gym": ["gym", "fitness", "fitness centre", "fitness center", "health club"],
-    "gyms": ["gyms", "fitness", "fitness centres", "fitness centers"],
-    "fitness": ["fitness", "gym", "fitness centre", "fitness center"],
-    "banks": ["banks", "bank", "financial"],
-    "bank": ["bank", "banks", "financial"],
-    "atm": ["ATM", "atm", "cash machine"],
-    "salons": ["salons", "salon", "beauty parlor", "beauty salon"],
-    "salon": ["salon", "salons", "beauty parlor", "beauty salon"],
-    "beauty": ["beauty", "beauty salon", "beauty parlor", "spa"],
-    "spa": ["spa", "spas", "wellness", "beauty"],
-    "supermarkets": ["supermarkets", "supermarket", "grocery", "grocery store"],
-    "supermarket": ["supermarket", "supermarkets", "grocery", "grocery store"],
-    "grocery": ["grocery", "grocery store", "supermarket"],
-    "car": ["car", "automobile", "vehicle", "auto"],
-    "automobile": ["automobile", "car", "vehicle", "auto"],
-    "clothing": ["clothing", "clothes", "fashion", "apparel"],
-    "fashion": ["fashion", "clothing", "clothes", "apparel"],
-    "electronics": ["electronics", "electronic", "gadget"],
-    "pet": ["pet", "pets", "pet shop", "pet store", "animal"],
-    "lawyer": ["lawyer", "lawyers", "attorney", "legal", "advocate"],
-    "legal": ["legal", "lawyer", "lawyers", "attorney", "advocate"],
-    "accounting": ["accounting", "accountant", "CA", "chartered accountant"],
-    "real estate": ["real estate", "property", "realty"],
-    "schools": ["schools", "education", "learning"],
-    "colleges": ["colleges", "college", "education", "university"],
 }
 
 GENERIC_BUSINESS_SUFFIXES: list[str] = [
@@ -196,15 +115,38 @@ GENERIC_NAME_PATTERN: str = (
 LOCATION_MATCH_RADIUS_DEGREES: float = 0.45
 ENTITY_MATCH_RADIUS_DEGREES: float = 0.0005
 
+# Broad category keyword groups for relevance validation.
+# A result is relevant if ANY keyword from the group appears in its data.
+# This is NOT an allowlist — it's a relevance heuristic.
+CATEGORY_KEYWORD_GROUPS: dict[str, list[str]] = {
+    "hospital": ["hospital", "medical", "healthcare", "clinic", "diagnostic", "nursing", "care", "surgery", "health"],
+    "restaurant": ["restaurant", "cafe", "café", "dining", "food", "bistro", "grill", "pizza", "kitchen", "eatery", "bar", "pub"],
+    "hotel": ["hotel", "motel", "inn", "resort", "lodge", "accommodation", "hostel", "lodging"],
+    "school": ["school", "academy", "education", "learning", "tuition"],
+    "college": ["college", "university", "institute", "education", "campus"],
+    "shop": ["shop", "store", "retail", "mart", "market", "mall", "outlet", "boutique"],
+    "clothing": ["clothing", "clothes", "fashion", "apparel", "garment", "wear", "textile", "boutique"],
+    "pharmacy": ["pharmacy", "pharmaceutical", "drugstore", "chemist", "medicine", "drug"],
+    "dentist": ["dental", "dentist", "orthodont", "tooth", "oral"],
+    "clinic": ["clinic", "medical", "healthcare", "doctor", "physician", "diagnostic"],
+    "bank": ["bank", "financial", "finance", "credit", "loan", "insurance"],
+    "gym": ["gym", "fitness", "health club", "yoga", "workout", "exercise"],
+    "salon": ["salon", "beauty", "spa", "parlor", "parlor", "hair", "nail"],
+    "auto": ["auto", "car", "vehicle", "automobile", "motor", "garage", "workshop"],
+    "real estate": ["real estate", "property", "realtor", "realty", "construction", "builder"],
+    "lawyer": ["lawyer", "attorney", "legal", "advocate", "law firm", "counsel"],
+    "accounting": ["accountant", "accounting", "CA", "chartered accountant", "tax"],
+    "it": ["software", "IT", "technology", "tech", "digital", "computer", "data", "cloud", "SaaS", "startup"],
+    "manufacturing": ["manufacturing", "factory", "industrial", "production", "plant", "fabricat"],
+    "consulting": ["consulting", "consultant", "advisory", "management", "strategy"],
+    "logistics": ["logistics", "shipping", "freight", "cargo", "delivery", "transport", "courier"],
+    "restaurant_india": ["restaurant", "food", "dining", "cafe", "biryani", "tiffin", "mess", "canteen"],
+}
+
 
 def get_coords_for_city(city: str) -> tuple[float, float] | None:
     """Look up coordinates for a city name. Returns (lat, lng) or None."""
     return CITY_COORDS.get(city.lower().strip())
-
-
-def get_district_for_city(city: str) -> str | None:
-    """Look up district for a city name. Returns district string or None."""
-    return CITY_DISTRICTS.get(city.lower().strip())
 
 
 def is_state_name(text: str) -> bool:
@@ -213,34 +155,128 @@ def is_state_name(text: str) -> bool:
 
 
 def get_category_synonyms(category: str) -> list[str]:
-    """Get query variations for a category. Falls back to [category] if no match.
+    """Get related keywords for a category from CATEGORY_KEYWORD_GROUPS.
     
-    For multi-word queries like 'software companies', generates useful
-    variations. For single words like 'dentists', looks up synonyms.
-    Always returns the original category first.
+    Used by search adapters to generate query variations.
+    Returns a list of related keywords (not an allowlist).
     """
     cat_lower = category.lower().strip()
-    if not cat_lower:
-        return [category]
-
-    # Exact match in synonym map
-    if cat_lower in CATEGORY_SYNONYMS:
-        return CATEGORY_SYNONYMS[cat_lower]
-
-    # Partial match - check if any key is contained in the query
-    for key, synonyms in CATEGORY_SYNONYMS.items():
+    for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
         if key in cat_lower or cat_lower in key:
-            return synonyms
-
-    # Multi-word: try matching the last word (e.g. "software companies" -> "companies")
-    words = cat_lower.split()
-    if len(words) > 1:
-        last_word = words[-1]
-        if last_word in CATEGORY_SYNONYMS:
-            base_synonyms = CATEGORY_SYNONYMS[last_word]
-            return [category] + [f"{words[0]} {s}" for s in base_synonyms if s != last_word]
-
+            return keywords
+    # Fallback: return the original category
     return [category]
+
+
+def _extract_category_keywords(category: str) -> set[str]:
+    """Extract meaningful keywords from a category string.
+    
+    'clothing shops in Hyderabad' -> {'clothing', 'shops'}
+    'restaurants' -> {'restaurants'}
+    'software companies' -> {'software', 'companies'}
+    'startups' -> {'startups'}
+    """
+    stop_words = {
+        "in", "near", "at", "around", "from", "the", "a", "an",
+        "and", "or", "of", "for", "with", "to", "top", "best",
+        "companies", "company", "firms", "firm", "businesses", "business",
+        "services", "service", "providers", "provider",
+        "shops", "shop", "stores", "store",
+        "centers", "centre", "center", "centers",
+        "near", "around", "within",
+    }
+    words = re.findall(r"[a-zA-Z]+", category.lower())
+    return {w for w in words if w not in stop_words and len(w) > 2}
+
+
+def check_category_relevance(record: dict, category: str) -> bool:
+    """Check if a record is relevant to the requested category.
+    
+    Uses keyword-based matching against the record's name, industry,
+    address, source_url, and metadata. This is a HEURISTIC, not an
+    allowlist — it checks semantic relevance, not category membership.
+    
+    Returns True if the record is plausibly relevant.
+    Returns True if relevance cannot be determined (fail-open).
+    """
+    if not category:
+        return True
+
+    raw = record.get("raw_data", {})
+    # Build text but exclude metadata dict repr
+    meta = raw.get("metadata")
+    meta_str = "" if meta is None or meta == {} else str(meta)
+    text = " ".join([
+        raw.get("name") or "",
+        raw.get("industry") or "",
+        raw.get("address") or "",
+        raw.get("city") or "",
+        raw.get("source_url") or "",
+        raw.get("maps_url") or "",
+        meta_str,
+    ]).lower()
+
+    # Fail-open: no text data means we can't judge relevance
+    if not text.strip():
+        return True
+
+    cat_keywords = _extract_category_keywords(category)
+    if not cat_keywords:
+        return True
+
+    # 1. Direct keyword match
+    for kw in cat_keywords:
+        if kw in text:
+            return True
+
+    # 2. Expand category keywords using CATEGORY_KEYWORD_GROUPS
+    # "dentists" -> look up "dentist" group -> ["dental", "dentist", "orthodont", ...]
+    # "startups" -> look up "it" group (has "startup") -> ["software", "technology", ...]
+    all_group_keywords = set()
+    for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
+        # Match if key (or key+s) is in category using word boundaries
+        # Skip short/generic keys like "shop" to avoid false matches
+        if len(key) >= 5:
+            key_pattern = r'\b' + re.escape(key) + r'(s|es)?\b'
+            if re.search(key_pattern, category.lower()):
+                all_group_keywords.update(kw.lower() for kw in keywords)
+        # Also match if any group keyword is a stem-variant of the category
+        for kw in keywords:
+            kw_lower = kw.lower()
+            if len(kw_lower) >= 6 and kw_lower in category.lower():
+                all_group_keywords.update(k.lower() for k in keywords)
+                break
+    # Also check each extracted keyword against groups
+    for kw in cat_keywords:
+        for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
+            if kw in key or key in kw:
+                all_group_keywords.update(k.lower() for k in keywords)
+    # Check group keywords against record text
+    for gkw in all_group_keywords:
+        if gkw in text:
+            return True
+    # Also check each extracted keyword against groups
+    for kw in cat_keywords:
+        for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
+            if kw in key or key in kw:
+                all_group_keywords.update(k.lower() for k in keywords)
+    # Check group keywords against record text
+    for gkw in all_group_keywords:
+        if gkw in text:
+            return True
+
+    # 3. Word-level stem match: "dentists" vs "dental" share "dent" prefix
+    text_words = set(re.findall(r"[a-zA-Z]{4,}", text))
+    cat_words = set(re.findall(r"[a-zA-Z]{4,}", category.lower()))
+    all_words = cat_words | all_group_keywords
+    for aw in all_words:
+        for tw in text_words:
+            if len(aw) >= 5 and len(tw) >= 5:
+                # Check 5-char prefix match
+                if aw[:5] == tw[:5]:
+                    return True
+
+    return False
 
 
 def build_location_scopes(location: str) -> list[str]:
@@ -248,9 +284,6 @@ def build_location_scopes(location: str) -> list[str]:
     
     Always includes the raw user-provided location as the primary scope.
     Does NOT substitute nearby or different cities.
-    'London' -> ['London']
-    'Eluru, Andhra Pradesh' -> ['Eluru', 'Eluru Andhra Pradesh', 'Eluru Andhra Pradesh India']
-    'Toronto' -> ['Toronto', 'Toronto Canada']
     """
     if not location or not location.strip():
         return [""]

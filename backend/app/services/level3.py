@@ -32,6 +32,85 @@ from app.services.entity_resolution import resolve_entities
 logger = logging.getLogger(__name__)
 
 
+def _detect_country(cluster) -> str:
+    """Detect country from cluster data (phone, address, city, state).
+    
+    Uses phone prefix and known location data to determine country.
+    Falls back to 'Unknown' when country cannot be determined.
+    """
+    phone = (cluster.best_phone or "").strip()
+    city = (cluster.best_city or "").lower()
+    state = (cluster.best_state or "").lower()
+    address = (cluster.best_address or "").lower()
+
+    # Phone prefix detection
+    if phone.startswith("+91") or phone.startswith("91"):
+        return "India"
+    if phone.startswith("+44"):
+        return "United Kingdom"
+    if phone.startswith("+1"):
+        return "United States"
+    if phone.startswith("+61"):
+        return "Australia"
+    if phone.startswith("+81"):
+        return "Japan"
+    if phone.startswith("+49"):
+        return "Germany"
+    if phone.startswith("+33"):
+        return "France"
+    if phone.startswith("+55"):
+        return "Brazil"
+    if phone.startswith("+52"):
+        return "Mexico"
+    if phone.startswith("+86"):
+        return "China"
+    if phone.startswith("+971"):
+        return "UAE"
+    if phone.startswith("+65"):
+        return "Singapore"
+    if phone.startswith("+82"):
+        return "South Korea"
+    if phone.startswith("+39"):
+        return "Italy"
+    if phone.startswith("+34"):
+        return "Spain"
+    if phone.startswith("+31"):
+        return "Netherlands"
+    if phone.startswith("+46"):
+        return "Sweden"
+
+    # Indian states in address
+    indian_states = {
+        "andhra pradesh", "arunachal pradesh", "assam", "bihar",
+        "chhattisgarh", "goa", "gujarat", "haryana", "himachal pradesh",
+        "jharkhand", "karnataka", "kerala", "madhya pradesh", "maharashtra",
+        "manipur", "meghalaya", "mizoram", "nagaland", "odisha", "punjab",
+        "rajasthan", "sikkim", "tamil nadu", "telangana", "tripura",
+        "uttar pradesh", "uttarakhand", "west bengal", "delhi",
+    }
+    if state in indian_states or city in indian_states:
+        return "India"
+
+    # UK cities
+    uk_cities = {"london", "manchester", "birmingham", "leeds", "glasgow",
+                 "edinburgh", "liverpool", "bristol", "cardiff", "belfast"}
+    if city in uk_cities:
+        return "United Kingdom"
+
+    # US cities
+    us_cities = {"new york", "los angeles", "chicago", "houston", "phoenix",
+                 "san francisco", "seattle", "boston", "miami", "dallas"}
+    if city in us_cities:
+        return "United States"
+
+    # Canadian cities
+    ca_cities = {"toronto", "vancouver", "montreal", "calgary", "ottawa"}
+    if city in ca_cities:
+        return "Canada"
+
+    return "Unknown"
+
+
 async def run_clean(
     db: AsyncSession,
     organization_id,
@@ -155,7 +234,7 @@ async def run_clean(
                 address=cluster.best_address,
                 city=cluster.best_city,
                 state=cluster.best_state,
-                country="India",
+                country=_detect_country(cluster),
                 latitude=Decimal(str(cluster.latitude)) if cluster.latitude else None,
                 longitude=Decimal(str(cluster.longitude)) if cluster.longitude else None,
                 phone=cluster.best_phone,

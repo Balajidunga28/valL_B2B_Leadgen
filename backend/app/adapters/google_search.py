@@ -44,14 +44,9 @@ def _extract_location_from_address(address: str) -> tuple[str | None, str | None
     pm = re.search(r"\b(\d{6})\b", address)
     if pm:
         pin_code = pm.group(1)
-    for s in ["Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
-              "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka",
-              "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram",
-              "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu",
-              "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal", "Delhi"]:
-        if s.lower() in address.lower():
-            state = s
-            break
+    # Check for known state/region names from geo module
+    if is_state_name(address.split(",")[-1].strip() if "," in address else ""):
+        state = address.split(",")[-1].strip()
     addr_parts = [p.strip() for p in address.split(",")]
     if len(addr_parts) >= 2:
         second = addr_parts[-2].strip()
@@ -172,24 +167,6 @@ class GoogleSearchAdapter(SourceAdapter):
                     snippet = snippet_el.get_text(strip=True) if snippet_el else ""
                     link = title_el.get("href", "")
                     combined = f"{title} {snippet}"
-
-                    # Geographic validation: skip results clearly from wrong location
-                    if query_loc:
-                        combined_text = f"{title} {snippet} {link}".lower()
-                        # Skip results that mention a well-known city OTHER than the requested one
-                        other_cities = ["seattle", "new york", "los angeles", "chicago",
-                                       "san francisco", "boston", "miami", "dallas",
-                                       "houston", "phoenix", "philadelphia", "denver",
-                                       "portland", "las vegas", "nashville", "atlanta",
-                                       "austin", "charlotte", "detroit", "minneapolis",
-                                       "paris", "tokyo", "berlin", "sydney",
-                                       "sierra vista", "phoenix", "tucson"]
-                        for oc in other_cities:
-                            if oc != query_loc:
-                                if oc in combined_text:
-                                    break
-                        else:
-                            pass  # No other city found — keep the result
 
                     phones = []
                     for pm in re.finditer(r"(?:\+91[\s\-]?)?(\d{5}[\s\-]?\d{5}|\d{4}[\s\-]?\d{3}[\s\-]?\d{3}|\d{10})", combined):

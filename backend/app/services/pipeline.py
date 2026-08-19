@@ -30,6 +30,7 @@ from app.geo import (
     LOCATION_MATCH_RADIUS_DEGREES,
     ENTITY_MATCH_RADIUS_DEGREES,
     get_coords_for_city,
+    check_category_relevance,
 )
 from app.models.pipeline_run import PipelineRun
 from app.models.raw_record import RawRecord
@@ -65,6 +66,23 @@ def _extract_location_from_query(query: str) -> str | None:
             if loc:
                 return loc
     return None
+
+
+def _extract_category_from_query(query: str) -> str:
+    """Extract the category/entity from the query text.
+    
+    'restaurants in London' -> 'restaurants'
+    'hospitals in Rajahmundry' -> 'hospitals'
+    'clothing shops in Hyderabad' -> 'clothing shops'
+    'IT companies in Bangalore' -> 'IT companies'
+    'restaurants' -> 'restaurants'
+    """
+    q = query.strip()
+    for prep in [" in ", " near ", " at ", " around ", " from "]:
+        idx = q.lower().find(prep)
+        if idx != -1:
+            return q[:idx].strip()
+    return q.strip()
 
 
 async def get_adapter(db: AsyncSession, organization_id, source_name: str):
@@ -391,6 +409,9 @@ async def run_extraction(
         state = parts[1].strip() if len(parts) > 1 else None
 
     stored_count = 0
+    category = _extract_category_from_query(query)
+    logger.info(f"Extracted category: '{category}' from query: '{query}'")
+
     for result in results:
         if isinstance(result, Exception):
             continue
@@ -402,6 +423,10 @@ async def run_extraction(
 
             # Filter out records that don't match the requested location
             if not _validate_location(rec, city, state):
+                continue
+
+            # Category relevance validation — reject clearly irrelevant records
+            if not check_category_relevance(rec, category):
                 continue
 
             raw_data.setdefault("metadata", {})
