@@ -174,7 +174,7 @@ class GoogleSearchAdapter(SourceAdapter):
                         if len(phone) >= 10:
                             phones.append(phone)
                     name = title.strip()
-                    skip_words = ["list of", "top ", "best ", "directory of", "find ", "how to", "what is", "near me", "in india"]
+                    skip_words = ["list of", "top ", "best ", "directory of", "find ", "how to", "what is", "near me"]
                     if any(sw in name.lower() for sw in skip_words):
                         continue
                     if len(name) < 3 or len(name) > 100:

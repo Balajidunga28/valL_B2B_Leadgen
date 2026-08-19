@@ -115,34 +115,6 @@ GENERIC_NAME_PATTERN: str = (
 LOCATION_MATCH_RADIUS_DEGREES: float = 0.45
 ENTITY_MATCH_RADIUS_DEGREES: float = 0.0005
 
-# Broad category keyword groups for relevance validation.
-# A result is relevant if ANY keyword from the group appears in its data.
-# This is NOT an allowlist — it's a relevance heuristic.
-CATEGORY_KEYWORD_GROUPS: dict[str, list[str]] = {
-    "hospital": ["hospital", "medical", "healthcare", "clinic", "diagnostic", "nursing", "care", "surgery", "health"],
-    "restaurant": ["restaurant", "cafe", "café", "dining", "food", "bistro", "grill", "pizza", "kitchen", "eatery", "bar", "pub"],
-    "hotel": ["hotel", "motel", "inn", "resort", "lodge", "accommodation", "hostel", "lodging"],
-    "school": ["school", "academy", "education", "learning", "tuition"],
-    "college": ["college", "university", "institute", "education", "campus"],
-    "shop": ["shop", "store", "retail", "mart", "market", "mall", "outlet", "boutique"],
-    "clothing": ["clothing", "clothes", "fashion", "apparel", "garment", "wear", "textile", "boutique"],
-    "pharmacy": ["pharmacy", "pharmaceutical", "drugstore", "chemist", "medicine", "drug"],
-    "dentist": ["dental", "dentist", "orthodont", "tooth", "oral"],
-    "clinic": ["clinic", "medical", "healthcare", "doctor", "physician", "diagnostic"],
-    "bank": ["bank", "financial", "finance", "credit", "loan", "insurance"],
-    "gym": ["gym", "fitness", "health club", "yoga", "workout", "exercise"],
-    "salon": ["salon", "beauty", "spa", "parlor", "parlor", "hair", "nail"],
-    "auto": ["auto", "car", "vehicle", "automobile", "motor", "garage", "workshop"],
-    "real estate": ["real estate", "property", "realtor", "realty", "construction", "builder"],
-    "lawyer": ["lawyer", "attorney", "legal", "advocate", "law firm", "counsel"],
-    "accounting": ["accountant", "accounting", "CA", "chartered accountant", "tax"],
-    "it": ["software", "IT", "technology", "tech", "digital", "computer", "data", "cloud", "SaaS", "startup"],
-    "manufacturing": ["manufacturing", "factory", "industrial", "production", "plant", "fabricat"],
-    "consulting": ["consulting", "consultant", "advisory", "management", "strategy"],
-    "logistics": ["logistics", "shipping", "freight", "cargo", "delivery", "transport", "courier"],
-    "restaurant_india": ["restaurant", "food", "dining", "cafe", "biryani", "tiffin", "mess", "canteen"],
-}
-
 
 def get_coords_for_city(city: str) -> tuple[float, float] | None:
     """Look up coordinates for a city name. Returns (lat, lng) or None."""
@@ -155,55 +127,41 @@ def is_state_name(text: str) -> bool:
 
 
 def get_category_synonyms(category: str) -> list[str]:
-    """Get related keywords for a category from CATEGORY_KEYWORD_GROUPS.
+    """Get search query variations for a category.
     
-    Used by search adapters to generate query variations.
-    Returns a list of related keywords (not an allowlist).
+    Returns the raw category and common variations. Does NOT use any
+    predefined keyword groups — the user's query determines the search.
     """
     cat_lower = category.lower().strip()
-    for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
-        if key in cat_lower or cat_lower in key:
-            return keywords
-    # Fallback: return the original category
-    return [category]
-
-
-def _extract_category_keywords(category: str) -> set[str]:
-    """Extract meaningful keywords from a category string.
+    variations = [category]
     
-    'clothing shops in Hyderabad' -> {'clothing', 'shops'}
-    'restaurants' -> {'restaurants'}
-    'software companies' -> {'software', 'companies'}
-    'startups' -> {'startups'}
-    """
-    stop_words = {
-        "in", "near", "at", "around", "from", "the", "a", "an",
-        "and", "or", "of", "for", "with", "to", "top", "best",
-        "companies", "company", "firms", "firm", "businesses", "business",
-        "services", "service", "providers", "provider",
-        "shops", "shop", "stores", "store",
-        "centers", "centre", "center", "centers",
-        "near", "around", "within",
-    }
-    words = re.findall(r"[a-zA-Z]+", category.lower())
-    return {w for w in words if w not in stop_words and len(w) > 2}
+    # Add singular/plural variations
+    if cat_lower.endswith("s") and len(cat_lower) > 4:
+        variations.append(cat_lower[:-1])
+    elif not cat_lower.endswith("s"):
+        variations.append(cat_lower + "s")
+    
+    return list(dict.fromkeys(variations))
 
 
 def check_category_relevance(record: dict, category: str) -> bool:
-    """Check if a record is relevant to the requested category.
+    """Check if a record is plausibly relevant to the requested category.
     
-    Uses keyword-based matching against the record's name, industry,
-    address, source_url, and metadata. This is a HEURISTIC, not an
-    allowlist — it checks semantic relevance, not category membership.
+    This is a PERMISSIVE filter — it only rejects records that are clearly
+    unrelated. It does NOT use any predefined keyword allowlist. The user's
+    query determines what is relevant, not a hardcoded category map.
     
-    Returns True if the record is plausibly relevant.
-    Returns True if relevance cannot be determined (fail-open).
+    Strategy:
+    - Fail-open: if we can't determine relevance, accept the record
+    - Accept if ANY word from the category appears in the record text
+    - Accept empty/unstructured records (let other filters handle quality)
+    - Only reject if record has text but ZERO word overlap with category
     """
     if not category:
         return True
 
     raw = record.get("raw_data", {})
-    # Build text but exclude metadata dict repr
+    # Build text from record fields, exclude metadata dict repr
     meta = raw.get("metadata")
     meta_str = "" if meta is None or meta == {} else str(meta)
     text = " ".join([
@@ -220,62 +178,38 @@ def check_category_relevance(record: dict, category: str) -> bool:
     if not text.strip():
         return True
 
-    cat_keywords = _extract_category_keywords(category)
-    if not cat_keywords:
+    # Extract meaningful words from the category (skip tiny/generic words)
+    cat_words = set(re.findall(r"[a-zA-Z]{3,}", category.lower()))
+    # Only skip truly generic prepositions/articles, NOT business terms
+    tiny_words = {"the", "and", "for", "with", "near", "around", "from", "that", "this"}
+    cat_words -= tiny_words
+    if not cat_words:
         return True
 
-    # 1. Direct keyword match
-    for kw in cat_keywords:
-        if kw in text:
+    # Accept if ANY category word appears in the record text
+    for cw in cat_words:
+        if cw in text:
             return True
-
-    # 2. Expand category keywords using CATEGORY_KEYWORD_GROUPS
-    # "dentists" -> look up "dentist" group -> ["dental", "dentist", "orthodont", ...]
-    # "startups" -> look up "it" group (has "startup") -> ["software", "technology", ...]
-    all_group_keywords = set()
-    for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
-        # Match if key (or key+s) is in category using word boundaries
-        # Skip short/generic keys like "shop" to avoid false matches
-        if len(key) >= 5:
-            key_pattern = r'\b' + re.escape(key) + r'(s|es)?\b'
-            if re.search(key_pattern, category.lower()):
-                all_group_keywords.update(kw.lower() for kw in keywords)
-        # Also match if any group keyword is a stem-variant of the category
-        for kw in keywords:
-            kw_lower = kw.lower()
-            if len(kw_lower) >= 6 and kw_lower in category.lower():
-                all_group_keywords.update(k.lower() for k in keywords)
-                break
-    # Also check each extracted keyword against groups
-    for kw in cat_keywords:
-        for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
-            if kw in key or key in kw:
-                all_group_keywords.update(k.lower() for k in keywords)
-    # Check group keywords against record text
-    for gkw in all_group_keywords:
-        if gkw in text:
-            return True
-    # Also check each extracted keyword against groups
-    for kw in cat_keywords:
-        for key, keywords in CATEGORY_KEYWORD_GROUPS.items():
-            if kw in key or key in kw:
-                all_group_keywords.update(k.lower() for k in keywords)
-    # Check group keywords against record text
-    for gkw in all_group_keywords:
-        if gkw in text:
-            return True
-
-    # 3. Word-level stem match: "dentists" vs "dental" share "dent" prefix
-    text_words = set(re.findall(r"[a-zA-Z]{4,}", text))
-    cat_words = set(re.findall(r"[a-zA-Z]{4,}", category.lower()))
-    all_words = cat_words | all_group_keywords
-    for aw in all_words:
+    # Also try stem matching: "parks" matches "park", "hotels" matches "hotel"
+    text_words = set(re.findall(r"[a-zA-Z]{3,}", text))
+    for cw in cat_words:
         for tw in text_words:
-            if len(aw) >= 5 and len(tw) >= 5:
-                # Check 5-char prefix match
-                if aw[:5] == tw[:5]:
-                    return True
+            # Match if either is a stem-variant of the other
+            if cw.startswith(tw) or tw.startswith(cw):
+                return True
+            # Match 4-char prefix: "parks" vs "park" share "park"
+            if len(cw) >= 4 and len(tw) >= 4 and cw[:4] == tw[:4]:
+                return True
 
+    # No overlap found — but still accept if record looks like a real business
+    # (has a name and at least one of: phone, address, website)
+    name = (raw.get("name") or "").strip()
+    has_contact = bool(raw.get("phone") or raw.get("address") or raw.get("website"))
+    if name and has_contact:
+        return True
+
+    # Last resort: reject only if record has a name but no contact info
+    # and no word overlap — likely a junk/article result
     return False
 
 

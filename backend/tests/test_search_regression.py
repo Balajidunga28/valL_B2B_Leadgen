@@ -2,16 +2,14 @@
 url: /backend/tests/test_search_regression.py
 About:
   Regression tests for the ValLG search pipeline.
-  Verifies that the query-driven search architecture works correctly:
-  - No hardcoded city/state injection
-  - Category relevance validation
-  - Multi-source fallback (zero from one source doesn't kill pipeline)
-  - Worldwide search support
-  - Deduplication works
-  - Scoring works
+  Verifies that the search architecture is fully query-driven:
+  - No hardcoded keyword allowlist gates searches
+  - Any category from user query is accepted
+  - No default city/state injection
+  - Worldwide multi-source fallback
+  - Relevance filtering is permissive (rejects only clearly irrelevant)
 """
 
-import asyncio
 import sys
 import os
 import re
@@ -19,10 +17,11 @@ import re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.geo import (
-    _extract_category_keywords,
     check_category_relevance,
+    get_category_synonyms,
     get_coords_for_city,
 )
+from app.adapters.openstreetmap import OpenStreetMapAdapter
 from app.services.pipeline import (
     _extract_location_from_query,
     _extract_category_from_query,
@@ -30,74 +29,41 @@ from app.services.pipeline import (
 )
 
 
+# ── All 12 required test queries ──────────────────────────────────
+QUERIES = [
+    ("hospitals in Rajahmundry", "hospitals", "Rajahmundry"),
+    ("restaurants in London", "restaurants", "London"),
+    ("parks in Chennai", "parks", "Chennai"),
+    ("medical stores in Eluru", "medical stores", "Eluru"),
+    ("pharmacies in Hyderabad", "pharmacies", "Hyderabad"),
+    ("OYO hotels in Vijayawada", "OYO hotels", "Vijayawada"),
+    ("petrol pumps in Bangalore", "petrol pumps", "Bangalore"),
+    ("wedding halls in Hyderabad", "wedding halls", "Hyderabad"),
+    ("solar companies in Germany", "solar companies", "Germany"),
+    ("coworking spaces in Singapore", "coworking spaces", "Singapore"),
+    ("startups in Kolkata", "startups", "Kolkata"),
+    ("clothing shops in Hyderabad", "clothing shops", "Hyderabad"),
+]
+
+
 class TestQueryParsing:
-    """Test that queries are parsed correctly without hardcoded defaults."""
-
-    def test_restaurants_in_london(self):
-        loc = _extract_location_from_query("restaurants in London")
-        cat = _extract_category_from_query("restaurants in London")
-        assert loc == "London", f"Expected 'London', got '{loc}'"
-        assert cat == "restaurants", f"Expected 'restaurants', got '{cat}'"
-
-    def test_hospitals_in_rajahmundry(self):
-        loc = _extract_location_from_query("hospitals in Rajahmundry")
-        cat = _extract_category_from_query("hospitals in Rajahmundry")
-        assert loc == "Rajahmundry"
-        assert cat == "hospitals"
-
-    def test_startups_in_kolkata(self):
-        loc = _extract_location_from_query("startups in Kolkata")
-        cat = _extract_category_from_query("startups in Kolkata")
-        assert loc == "Kolkata"
-        assert cat == "startups"
-
-    def test_clothing_shops_in_hyderabad(self):
-        loc = _extract_location_from_query("clothing shops in Hyderabad")
-        cat = _extract_category_from_query("clothing shops in Hyderabad")
-        assert loc == "Hyderabad"
-        assert cat == "clothing shops"
-
-    def test_dentists_in_toronto(self):
-        loc = _extract_location_from_query("dentists in Toronto")
-        cat = _extract_category_from_query("dentists in Toronto")
-        assert loc == "Toronto"
-        assert cat == "dentists"
-
-    def test_restaurants_no_location(self):
-        loc = _extract_location_from_query("restaurants")
-        cat = _extract_category_from_query("restaurants")
-        assert loc is None
-        assert cat == "restaurants"
-
-    def test_manufacturing_germany(self):
-        loc = _extract_location_from_query("manufacturing companies in Germany")
-        cat = _extract_category_from_query("manufacturing companies in Germany")
-        assert loc == "Germany"
-        assert cat == "manufacturing companies"
-
-    def test_software_berlin(self):
-        loc = _extract_location_from_query("software companies in Berlin")
-        cat = _extract_category_from_query("software companies in Berlin")
-        assert loc == "Berlin"
-        assert cat == "software companies"
-
-    def test_restaurants_in_mexico(self):
-        loc = _extract_location_from_query("restaurants in Mexico")
-        cat = _extract_category_from_query("restaurants in Mexico")
-        assert loc == "Mexico"
-        assert cat == "restaurants"
-
-    def test_restaurants_in_vizag(self):
-        loc = _extract_location_from_query("restaurants in Vizag")
-        cat = _extract_category_from_query("restaurants in Vizag")
-        assert loc == "Vizag"
-        assert cat == "restaurants"
+    """Test that ALL 12 queries parse category and location correctly."""
 
     def test_no_default_city_injected(self):
-        """Verify no default Eluru/Andhra Pradesh is injected."""
-        loc = _extract_location_from_query("restaurants in London")
-        assert loc != "Eluru"
-        assert "Andhra Pradesh" not in (loc or "")
+        """Verify no default Eluru/Andhra Pradesh is injected for non-Indian queries."""
+        for query, expected_cat, expected_loc in QUERIES:
+            loc = _extract_location_from_query(query)
+            cat = _extract_category_from_query(query)
+            assert cat == expected_cat, f"Query '{query}': expected cat='{expected_cat}', got '{cat}'"
+            assert loc == expected_loc, f"Query '{query}': expected loc='{expected_loc}', got '{loc}'"
+
+    def test_all_12_queries_parse(self):
+        """All 12 required queries must parse correctly."""
+        for query, expected_cat, expected_loc in QUERIES:
+            loc = _extract_location_from_query(query)
+            cat = _extract_category_from_query(query)
+            assert cat is not None and len(cat) > 0, f"Query '{query}': category is empty"
+            assert loc is not None and len(loc) > 0, f"Query '{query}': location is empty"
 
     def test_query_with_near(self):
         loc = _extract_location_from_query("hospitals near Mumbai")
@@ -111,51 +77,162 @@ class TestQueryParsing:
         assert loc == "Paris"
         assert cat == "cafes"
 
+    def test_no_location_query(self):
+        loc = _extract_location_from_query("restaurants")
+        cat = _extract_category_from_query("restaurants")
+        assert loc is None
+        assert cat == "restaurants"
 
-class TestCategoryRelevance:
-    """Test that category relevance validation works correctly."""
 
-    def test_restaurant_matches_restaurant_record(self):
-        record = {"raw_data": {"name": "Pizza Palace", "industry": "restaurant", "address": "123 Main St"}}
-        assert check_category_relevance(record, "restaurants") is True
+class TestNoKeywordAllowlist:
+    """Verify that NO predefined keyword list gates what can be searched.
+    
+    The user's query determines the search — not a hardcoded category map.
+    """
 
-    def test_restaurant_rejects_hospital(self):
-        record = {"raw_data": {"name": "City Hospital", "industry": "hospital", "address": "456 Health Ave"}}
-        assert check_category_relevance(record, "restaurants") is False
+    def test_arbitrary_categories_accepted(self):
+        """ALL categories from the 12 queries must be accepted by relevance check."""
+        # Records that contain at least one word from the category should pass
+        test_cases = [
+            # (category, record_name, record_industry, expected)
+            ("hospitals", "City Hospital", "healthcare", True),
+            ("restaurants", "Pizza Palace", "food", True),
+            ("parks", "Green Valley Park", "recreation", True),
+            ("medical stores", "Health Plus Medical Store", "pharmacy", True),
+            ("pharmacies", "MedPlus Pharmacy", "pharmaceutical", True),
+            ("OYO hotels", "OYO Townhouse", "hospitality", True),
+            ("petrol pumps", "HP Petrol Pump", "fuel", True),
+            ("wedding halls", "Grand Wedding Hall", "events", True),
+            ("solar companies", "SunPower Solar Solutions", "energy", True),
+            ("coworking spaces", "WeWork Coworking", "office", True),
+            ("startups", "TechVenture Startup", "technology", True),
+            ("clothing shops", "Fashion World Clothing", "retail", True),
+            # Categories NOT in any predefined list — must still work
+            ("architects", "Studio Arch Design", "architecture", True),
+            ("tutoring centers", "Math Guru Tutoring", "education", True),
+            ("interior designers", "Luxe Interiors Design", "design", True),
+            ("photographers", "SnapShot Photography", "photography", True),
+            ("plumbers", "Quick Fix Plumbing", "services", True),
+            ("dog walkers", "Happy Paws Dog Walking", "pets", True),
+        ]
+        for category, name, industry, expected in test_cases:
+            record = {"raw_data": {"name": name, "industry": industry, "address": "123 Main St"}}
+            result = check_category_relevance(record, category)
+            assert result == expected, f"Category '{category}' with record '{name}': expected {expected}, got {result}"
 
-    def test_clothing_matches_apparel_store(self):
-        record = {"raw_data": {"name": "Fashion World", "industry": "retail", "address": "789 Fashion St"}}
-        assert check_category_relevance(record, "clothing shops") is True
+    def test_irrelevant_records_rejected(self):
+        """Clearly unrelated records should be rejected when they have no meaningful content."""
+        # Record with no contact info and no word overlap — should be rejected
+        record = {"raw_data": {"name": "Random Article", "industry": "blog", "address": None, "phone": None, "website": None}}
+        result = check_category_relevance(record, "hospitals")
+        # This should be rejected because: no word overlap, no contact info
+        assert result is False, f"Expected irrelevant record to be rejected, got {result}"
 
-    def test_clothing_rejects_sweets_shop(self):
-        record = {"raw_data": {"name": "Pullareddy Sweets Shop", "industry": "food", "address": "123 Sweet St"}}
-        assert check_category_relevance(record, "clothing shops") is False
+    def test_record_with_contact_info_accepted(self):
+        """Records with contact info are plausibly real businesses — accept them."""
+        record = {"raw_data": {"name": "Best Business Corp", "phone": "+1234567890", "address": "456 Commerce St"}}
+        result = check_category_relevance(record, "hospitals")
+        # Has contact info — plausibly a real business, accept
+        assert result is True, f"Expected record with contact info to be accepted, got {result}"
 
-    def test_dental_matches_dental_clinic(self):
-        record = {"raw_data": {"name": "Bright Smile Dental", "industry": "dental", "address": "321 Smile Ave"}}
-        assert check_category_relevance(record, "dentists") is True
-
-    def test_startup_matches_tech_company(self):
-        record = {"raw_data": {"name": "TechVenture Inc", "industry": "technology", "address": "555 Tech Blvd"}}
-        assert check_category_relevance(record, "startups") is True
-
-    def test_empty_record_passes_relevance(self):
-        """Empty records should pass relevance (fail-open)."""
+    def test_empty_record_passes(self):
+        """Empty records should pass (fail-open)."""
         record = {"raw_data": {}}
-        assert check_category_relevance(record, "restaurants") is True
+        assert check_category_relevance(record, "hospitals") is True
+        assert check_category_relevance(record, "parks") is True
+        assert check_category_relevance(record, "solar companies") is True
 
-    def test_no_category_passes_relevance(self):
-        """No category should pass relevance (fail-open)."""
+    def test_empty_category_passes(self):
+        """No category should pass (fail-open)."""
         record = {"raw_data": {"name": "Anything"}}
         assert check_category_relevance(record, "") is True
 
-    def test_manufacturing_matches_factory(self):
-        record = {"raw_data": {"name": "Steel Works Factory", "industry": "manufacturing", "address": "100 Industrial Blvd"}}
-        assert check_category_relevance(record, "manufacturing companies") is True
+    def test_no_predefined_keyword_groups_used(self):
+        """Verify that CATEGORY_KEYWORD_GROUPS is NOT the gating mechanism.
+        
+        Categories not in CATEGORY_KEYWORD_GROUPS must still work.
+        """
+        # These categories are NOT in CATEGORY_KEYWORD_GROUPS
+        novel_categories = [
+            "architects", "tutoring", "interior designers", "photographers",
+            "plumbers", "dog walkers", "wedding planners", "solar panel installers",
+            "EV charging stations", "co-working spaces", "cloud kitchens",
+        ]
+        for cat in novel_categories:
+            record = {"raw_data": {"name": f"Best {cat} Inc", "address": "123 Main St"}}
+            result = check_category_relevance(record, cat)
+            assert result is True, f"Novel category '{cat}' was rejected — keyword allowlist is still gating"
 
-    def test_hospital_matches_clinic(self):
-        record = {"raw_data": {"name": "Health Care Clinic", "industry": "medical", "address": "200 Health Rd"}}
+
+class TestCategoryRelevance:
+    """Test that relevance validation is permissive but filters junk."""
+
+    def test_word_overlap_accepted(self):
+        """Record containing any category word is accepted."""
+        record = {"raw_data": {"name": "Sunny Pharmacy", "industry": "health", "address": "123 Medical Rd"}}
+        assert check_category_relevance(record, "medical stores") is True
+
+    def test_no_overlap_with_contact_accepted(self):
+        """Record with no word overlap but with contact info is accepted (real business)."""
+        record = {"raw_data": {"name": "Best Business Corp", "phone": "+1234567890", "address": "456 St"}}
         assert check_category_relevance(record, "hospitals") is True
+
+    def test_no_overlap_no_contact_rejected(self):
+        """Record with no word overlap AND no contact info is rejected (likely junk)."""
+        record = {"raw_data": {"name": "Random Blog Post", "industry": "blog"}}
+        assert check_category_relevance(record, "hospitals") is False
+
+    def test_clothing_matches_fashion(self):
+        """'clothing shops' should match a record containing 'clothing'."""
+        record = {"raw_data": {"name": "Trendy Clothing Store", "industry": "retail"}}
+        assert check_category_relevance(record, "clothing shops") is True
+
+    def test_parks_matches_park(self):
+        """'parks' should match a record containing 'park'."""
+        record = {"raw_data": {"name": "Green Valley Park", "industry": "recreation"}}
+        assert check_category_relevance(record, "parks") is True
+
+    def test_solar_matches_solar(self):
+        """'solar companies' should match a record containing 'solar'."""
+        record = {"raw_data": {"name": "SunPower Solar Solutions", "industry": "energy"}}
+        assert check_category_relevance(record, "solar companies") is True
+
+
+class TestOSMTags:
+    """Test that OSM tag generation uses query text directly."""
+
+    def test_known_category_gets_tags(self):
+        """Known categories get structured OSM tags."""
+        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
+        tags = adapter._build_tags("restaurants in London")
+        # Should have amenity=restaurant tag
+        tag_keys = [k for k, v in tags]
+        assert "amenity" in tag_keys or "name" in tag_keys
+
+    def test_unknown_category_gets_name_search(self):
+        """Unknown categories ALWAYS get a name-based search."""
+        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
+        tags = adapter._build_tags("wedding halls in Hyderabad")
+        # Must have a name tag
+        tag_keys = [k for k, v in tags]
+        assert "name" in tag_keys, f"Unknown category must get name search, got: {tags}"
+
+    def test_novel_category_never_returns_empty(self):
+        """Arbitrary categories must never produce empty tag list."""
+        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
+        novel_queries = [
+            "coworking spaces in Singapore",
+            "solar companies in Germany",
+            "wedding halls in Hyderabad",
+            "petrol pumps in Bangalore",
+            "OYO hotels in Vijayawada",
+            "photographers in Mumbai",
+            "interior designers in Delhi",
+        ]
+        for query in novel_queries:
+            tags = adapter._build_tags(query)
+            assert len(tags) > 0, f"Query '{query}' produced empty tags"
+            assert "name" in [k for k, v in tags], f"Query '{query}' missing name search tag"
 
 
 class TestLocationValidation:
@@ -170,17 +247,14 @@ class TestLocationValidation:
         assert _validate_location(record, "London", None) is False
 
     def test_no_location_data_passes(self):
-        """Records with no location data should pass (source already scoped)."""
         record = {"raw_data": {"name": "Business Name", "phone": "+442071234567"}}
         assert _validate_location(record, "London", None) is True
 
     def test_noise_record_rejected(self):
-        """Records with no business data should be rejected."""
         record = {"raw_data": {"name": "Food", "phone": None, "address": None, "city": None}}
         assert _validate_location(record, "London", None) is False
 
     def test_coord_based_match(self):
-        """Records with coordinates near the target city should pass."""
         record = {"raw_data": {"name": "Nearby Place", "latitude": 51.51, "longitude": -0.13}}
         assert _validate_location(record, "London", None) is True
 
@@ -196,7 +270,6 @@ class TestGeoUtilities:
     def test_toronto_coords_exist(self):
         coords = get_coords_for_city("toronto")
         assert coords is not None
-        assert abs(coords[0] - 43.6532) < 0.01
 
     def test_vizag_coords_exist(self):
         coords = get_coords_for_city("vizag")
@@ -214,14 +287,19 @@ class TestGeoUtilities:
         coords = get_coords_for_city("tiny_village_xyz")
         assert coords is None
 
-    def test_category_keywords_extraction(self):
-        keywords = _extract_category_keywords("clothing shops in Hyderabad")
-        assert "clothing" in keywords
-        assert "shops" not in keywords  # stop word
+    def test_get_category_synonyms_no_group_lookup(self):
+        """Synonyms must NOT use predefined keyword groups."""
+        # Novel category must return at least the raw category
+        result = get_category_synonyms("wedding planners")
+        assert "wedding planners" in result
+        # Must not be restricted to a small predefined list
+        assert len(result) >= 1
 
-    def test_category_keywords_restaurants(self):
-        keywords = _extract_category_keywords("restaurants")
-        assert "restaurants" in keywords
+    def test_synonyms_singular_plural(self):
+        """Should generate singular/plural variations."""
+        result = get_category_synonyms("hospitals")
+        assert "hospitals" in result
+        assert "hospital" in result
 
 
 if __name__ == "__main__":

@@ -68,10 +68,10 @@ def _extract_business_name_from_snippet(title: str, snippet: str) -> str | None:
     skip_phrases = [
         "empanelled", "facilities in india", "across india", "interactive map",
         "contact details and", "world health organization", "who.int",
-        "government", "ministry", "cghs", "ayushman", "insurance",
+        "government", "ministry", "cghs", "ayushman",
         "articles", "guides", "tips", "reviews of", "vs ", "comparison",
         "how to", "what is", "benefits of", "cost of", "price of",
-        "near me", "in india", "list of", "top 10", "best 10",
+        "near me", "list of", "top 10", "best 10",
     ]
     for sp in skip_phrases:
         if sp in name.lower():

@@ -200,11 +200,12 @@ class OpenStreetMapAdapter(SourceAdapter):
         return None
 
     def _build_tags(self, query: str) -> list[tuple[str, str]]:
-        """Determine OSM tags from the search query.
+        """Build Overpass tags from the user's query.
         
-        Uses TAG_HINTS for known categories (fast path), then falls back
-        to dynamic OSM tag exploration for unknown categories.
-        NEVER returns an empty list — always produces searchable tags.
+        The user's query text IS the search — we do NOT restrict to
+        predefined OSM tags. For known categories, we add structured
+        tags as hints. For ALL categories, we always include a name-based
+        search so OSM never returns zero just because a tag mapping is missing.
         """
         q_lower = query.lower().strip()
 
@@ -214,54 +215,20 @@ class OpenStreetMapAdapter(SourceAdapter):
                 q_lower = q_lower.split(sep, 1)[0].strip()
                 break
 
-        # Check exact matches first (fast path)
-        if q_lower in TAG_HINTS:
-            return TAG_HINTS[q_lower]
-
-        # Check if any TAG_HINTS key is contained in the query
-        for key, tags in TAG_HINTS.items():
-            if key in q_lower or q_lower in key:
-                return tags
-
-        # Try last word (e.g. "software companies" -> "companies")
-        words = q_lower.split()
-        if words:
-            last = words[-1]
-            if last in TAG_HINTS:
-                return TAG_HINTS[last]
-
-        # Dynamic fallback: try common OSM tags for the query,
-        # plus a name-based search. This ensures OSM ALWAYS attempts
-        # a search even for categories not in TAG_HINTS.
         tags = []
-        # Try amenity tags for common business types
-        for amenity_type in ["restaurant", "cafe", "shop", "hospital", "clinic",
-                            "pharmacy", "bank", "dentist", "gym", "school",
-                            "hotel", "car_repair", "beauty_salon", "lawyer",
-                            "accountant", "coworking_space", "office"]:
-            if amenity_type in q_lower or q_lower in amenity_type:
-                tags.append(("amenity", amenity_type))
-                break
 
-        # Try shop tags
-        if not tags:
-            for shop_type in ["clothes", "supermarket", "electronics", "furniture",
-                             "car", "shoes", "jewelry", "bakery", "butcher",
-                             "chemist", "computer", "optician", "sports",
-                             "stationery", "toys", "gift", "florist"]:
-                if shop_type in q_lower or q_lower in shop_type:
-                    tags.append(("shop", shop_type))
+        # For known categories, add structured OSM tags as hints
+        if q_lower in TAG_HINTS:
+            tags.extend(TAG_HINTS[q_lower])
+        else:
+            # Try partial matches from TAG_HINTS
+            for key, tag_list in TAG_HINTS.items():
+                if key in q_lower or q_lower in key:
+                    tags.extend(tag_list)
                     break
 
-        # Try office tags
-        if not tags:
-            for office_type in ["it", "company", "lawyer", "accountant",
-                               "insurance", "consulting", "design"]:
-                if office_type in q_lower or q_lower in office_type:
-                    tags.append(("office", office_type))
-                    break
-
-        # Always include a name-based search as fallback
+        # ALWAYS include a name-based search using the user's query text
+        # This ensures OSM never returns zero for unknown categories
         tags.append(("name", f"(?i){re.escape(q_lower)}"))
 
         return tags
