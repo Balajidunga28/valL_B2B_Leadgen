@@ -202,9 +202,11 @@ class OpenStreetMapAdapter(SourceAdapter):
     def _build_tag_groups(self, query: str) -> list[list[tuple[str, str]]]:
         """Build Overpass tag groups from the user's query.
         
-        The user's query text IS the search. For known categories, we use
-        structured OSM tags (fast, precise). For unknown categories, we use
-        name-based search (flexible, works for any category).
+        The user's query text IS the search. We ALWAYS include a name-based
+        search for maximum coverage. For known categories, we ALSO add
+        structured OSM tags as an additional search group (UNION/OR logic).
+        This ensures we never return zero results just because a business
+        isn't tagged with the expected OSM tag.
         """
         import re
         q_lower = query.lower().strip()
@@ -217,16 +219,14 @@ class OpenStreetMapAdapter(SourceAdapter):
 
         tag_groups = []
 
-        # Check if this is a known category with structured OSM tags
+        # Group 1: Structured OSM tags for known categories (if any)
         if q_lower in TAG_HINTS:
-            # Known category: use structured tags ONLY (no name filter)
-            # This is fast and returns all matching OSM entities
             tag_groups.append(TAG_HINTS[q_lower])
-        else:
-            # Unknown category: use name-based search
-            # This works for ANY category without predefined mappings
-            name_regex = f".*{re.escape(q_lower)}.*"
-            tag_groups.append([("name", name_regex)])
+
+        # Group 2: ALWAYS include name-based search using the user's query text
+        # Use simple lowercase pattern - _build_overpass_query will convert to POSIX regex
+        name_regex = q_lower
+        tag_groups.append([("name", name_regex)])
 
         return tag_groups
 
@@ -243,6 +243,7 @@ class OpenStreetMapAdapter(SourceAdapter):
         """Convert a simple string pattern to POSIX case-insensitive regex.
         
         Converts 'spa' to '[Ss][Pp][Aa]' and '.*spa.*' to '.*[Ss][Pp][Aa].*'
+        Also handles common singular/plural: 'spas' -> '[Ss][Pp][Aa][Ss]?'
         """
         import re
         # Replace each alphabetic character with [upper][lower] pair
@@ -262,8 +263,14 @@ class OpenStreetMapAdapter(SourceAdapter):
                 while j < len(pattern) and pattern[j].isalpha():
                     j += 1
                 alpha_seq = pattern[i:j]
-                for ch in alpha_seq:
-                    result += f'[{ch.upper()}{ch.lower()}]'
+                # Handle trailing 's' for plural -> make it optional
+                if len(alpha_seq) > 3 and alpha_seq.endswith('s'):
+                    for ch in alpha_seq[:-1]:
+                        result += f'[{ch.upper()}{ch.lower()}]'
+                    result += f'[{alpha_seq[-1].upper()}{alpha_seq[-1].lower()}]?'
+                else:
+                    for ch in alpha_seq:
+                        result += f'[{ch.upper()}{ch.lower()}]'
                 i = j
             else:
                 result += pattern[i]
@@ -276,8 +283,13 @@ class OpenStreetMapAdapter(SourceAdapter):
         for group in tag_groups:
             tag_filters = ""
             for k, v in group:
-                # Detect regex patterns: contains regex metacharacters
-                is_regex = any(c in v for c in ".*+?^$[]()|{}")
+                # For name key, always use regex (case-insensitive substring match)
+                # For other keys, detect regex patterns: contains regex metacharacters
+                if k == "name":
+                    is_regex = True
+                else:
+                    is_regex = any(c in v for c in ".*+?^$[]()|{}")
+                
                 if is_regex:
                     # Convert to POSIX case-insensitive regex
                     posix_pattern = self._to_posix_case_insensitive(v)
