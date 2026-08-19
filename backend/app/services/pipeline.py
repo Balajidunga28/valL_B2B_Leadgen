@@ -376,7 +376,7 @@ async def run_extraction(
         source_name, records, error = result
         source_counts[source_name] = len(records)
         if error:
-            if "No active API key" in error or "Unknown source" in error:
+            if "No active API key" in error or "Unknown source" in error or "429" in error or "Too many requests" in error.lower():
                 source_warnings.append(f"{source_name}: {error}")
             else:
                 errors.append(f"{source_name}: {error}")

@@ -149,29 +149,42 @@ class OpenStreetMapAdapter(SourceAdapter):
 
     async def _geocode(self, location: str) -> tuple[float, float, float] | None:
         """Geocode a location string to (lat, lon, radius_meters)."""
-        resp = await self.client.get(
-            NOMINATIM_URL,
-            params={"q": location, "format": "json", "limit": 1},
-            headers={"User-Agent": "ValLG/1.0 (leadgen-app)"},
-        )
-        resp.raise_for_status()
-        results = resp.json()
-        if not results:
-            return None
-        r = results[0]
-        lat = float(r["lat"])
-        lon = float(r["lon"])
-        # Use bounding box to estimate radius, default 10km
-        if "boundingbox" in r:
-            bb = [float(x) for x in r["boundingbox"]]
-            lat_span = abs(bb[2] - bb[0])
-            lon_span = abs(bb[3] - bb[1])
-            radius = max(lat_span, lon_span) * 111_000 / 2
-            radius = max(radius, 5000)
-            radius = min(radius, 50000)
-        else:
-            radius = 10000
-        return lat, lon, radius
+        import asyncio as _asyncio
+        for attempt in range(3):
+            try:
+                resp = await self.client.get(
+                    NOMINATIM_URL,
+                    params={"q": location, "format": "json", "limit": 1},
+                    headers={"User-Agent": "ValLG/1.0 (leadgen-app)"},
+                )
+                if resp.status_code == 429:
+                    wait = 2 * (attempt + 1)
+                    logger.warning(f"Nominatim rate limited, waiting {wait}s...")
+                    await _asyncio.sleep(wait)
+                    continue
+                resp.raise_for_status()
+                results = resp.json()
+                if not results:
+                    return None
+                r = results[0]
+                lat = float(r["lat"])
+                lon = float(r["lon"])
+                if "boundingbox" in r:
+                    bb = [float(x) for x in r["boundingbox"]]
+                    lat_span = abs(bb[2] - bb[0])
+                    lon_span = abs(bb[3] - bb[1])
+                    radius = max(lat_span, lon_span) * 111_000 / 2
+                    radius = max(radius, 5000)
+                    radius = min(radius, 50000)
+                else:
+                    radius = 10000
+                return lat, lon, radius
+            except Exception as e:
+                if attempt == 2:
+                    logger.error(f"Geocode failed after 3 attempts: {e}")
+                    return None
+                await _asyncio.sleep(2 * (attempt + 1))
+        return None
 
     def _build_tags(self, query: str) -> list[tuple[str, str]]:
         """Determine OSM tags from the search query.
