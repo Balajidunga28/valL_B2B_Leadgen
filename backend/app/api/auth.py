@@ -1,20 +1,23 @@
 """
 url: /backend/app/api/auth.py
 About:
-  Authentication API endpoints for ValLG. Handles user login with JWT
-  token generation and current user retrieval. No registration endpoint
-  — users are created via seed data or admin tooling.
+  Authentication API endpoints for ValLG. Handles user signup, login with
+  JWT token generation, current user retrieval, and logout.
 """
 
+import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.organization import Organization
 from app.models.user import User
-from app.schemas.auth import LoginRequest, LoginResponse, UserResponse
-from app.services.auth import authenticate_user, create_access_token
+from app.schemas.auth import LoginRequest, LoginResponse, SignupRequest, UserResponse
+from app.services.auth import authenticate_user, create_access_token, hash_password
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -71,11 +74,56 @@ async def logout():
 
 @router.post("/signup", response_model=LoginResponse)
 async def signup(
-    request: LoginRequest,
+    request: SignupRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Register a new user."""
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Signup not available. Contact admin.",
+    """Register a new user with a new organization."""
+    # Check if email already exists
+    result = await db.execute(select(User).where(User.email == request.email))
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        )
+
+    # Create organization
+    org_id = uuid4()
+    slug = re.sub(r"[^a-z0-9]+", "-", request.name.lower().strip())[:80].strip("-")
+    if not slug:
+        slug = f"org-{org_id.hex[:8]}"
+    org = Organization(
+        id=org_id,
+        name=request.name,
+        slug=slug,
+        plan="free",
+    )
+    db.add(org)
+
+    # Create user
+    user = User(
+        id=uuid4(),
+        organization_id=org_id,
+        email=request.email,
+        password_hash=hash_password(request.password),
+        name=request.name,
+        role="admin",
+        is_active=True,
+    )
+    db.add(user)
+
+    user.last_login_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(user)
+
+    token = create_access_token(user.id, user.organization_id)
+
+    return LoginResponse(
+        token=token,
+        user=UserResponse(
+            id=str(user.id),
+            email=user.email,
+            name=user.name,
+            role=user.role,
+            organization_id=str(user.organization_id),
+        ),
     )

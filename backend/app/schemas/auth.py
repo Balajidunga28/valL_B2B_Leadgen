@@ -13,6 +13,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class SignupRequest(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+
 class LoginResponse(BaseModel):
     token: str
     user: "UserResponse"
