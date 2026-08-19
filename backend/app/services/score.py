@@ -94,9 +94,14 @@ _HEALTHCARE_SUBS = {
 
 
 def score_industry(industry: str | None) -> Decimal:
-    """Score based on whether industry is available and recognized."""
+    """Score based on whether industry is available and recognized.
+    
+    Returns 0.5 when industry is unknown — the business is still real,
+    we just haven't classified it. Only returns 0.0 when explicitly
+    set to an invalid value.
+    """
     if not industry:
-        return Decimal("0.0")
+        return Decimal("0.5")
 
     industry_lower = industry.lower().strip()
 
@@ -109,15 +114,19 @@ def score_industry(industry: str | None) -> Decimal:
         if industry_lower.startswith(known):
             return Decimal("1.0")
 
-    # Industry is set but unrecognized
-    return Decimal("0.5")
+    # Industry is set but unrecognized — still a real business
+    return Decimal("0.7")
 
 
 def score_size(company_size: str | None) -> Decimal:
-    """Score based on whether company size information is available."""
+    """Score based on whether company size information is available.
+    
+    Returns 0.5 when unknown — missing size data doesn't mean the
+    business isn't real.
+    """
     if company_size and str(company_size).strip():
         return Decimal("1.0")
-    return Decimal("0.0")
+    return Decimal("0.5")
 
 
 def score_location(
@@ -143,10 +152,14 @@ def score_location(
 
 
 def score_technology(technologies: list | None) -> Decimal:
-    """Score based on whether technology information is available."""
+    """Score based on whether technology information is available.
+    
+    Returns 0.5 when unknown — missing tech data doesn't mean the
+    business isn't real.
+    """
     if technologies and isinstance(technologies, list) and len(technologies) > 0:
         return Decimal("1.0")
-    return Decimal("0.0")
+    return Decimal("0.5")
 
 
 def score_data_quality(

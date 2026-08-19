@@ -302,6 +302,62 @@ class TestGeoUtilities:
         assert "hospital" in result
 
 
+class TestScoring:
+    """Test that scoring doesn't penalize for unknown enrichment data."""
+
+    def test_unknown_industry_not_zero(self):
+        from app.services.score import score_industry
+        # None industry should give 0.5, not 0.0
+        assert score_industry(None) == 0.5
+
+    def test_known_industry_full_score(self):
+        from app.services.score import score_industry
+        assert score_industry("healthcare") == 1.0
+
+    def test_unknown_size_not_zero(self):
+        from app.services.score import score_size
+        assert score_size(None) == 0.5
+
+    def test_unknown_tech_not_zero(self):
+        from app.services.score import score_technology
+        assert score_technology(None) == 0.5
+
+    def test_spa_not_zero_score(self):
+        """A spa record should not get 0 total score."""
+        from app.services.score import compute_total_score, score_industry, score_size, score_location, score_technology, score_data_quality, score_validation
+        total = compute_total_score(
+            industry_score=score_industry(None),
+            size_score=score_size(None),
+            location_score=score_location("Delhi", 28.61, 77.21, "123 Spa Road"),
+            technology_score=score_technology(None),
+            data_quality_score=score_data_quality("+911234567890", None, None, "123 Spa Road", None, None, 4.5, 100),
+            validation_score=score_validation("VALID"),
+        )
+        assert total > 0, f"Expected positive score for spa record, got {total}"
+
+
+class TestLocationFuzzy:
+    """Test that fuzzy city matching works."""
+
+    def test_new_delhi_matches_delhi(self):
+        record = {"raw_data": {"name": "Spa Delhi", "city": "New Delhi", "address": "123 Main St"}}
+        assert _validate_location(record, "Delhi", None) is True
+
+    def test_south_delhi_matches_delhi(self):
+        record = {"raw_data": {"name": "Spa Delhi", "city": "South Delhi", "address": "123 Main St"}}
+        assert _validate_location(record, "Delhi", None) is True
+
+    def test_name_only_record_accepted(self):
+        """Record with only a name should be accepted (real business)."""
+        record = {"raw_data": {"name": "Best Spa Delhi"}}
+        assert _validate_location(record, "Delhi", None) is True
+
+    def test_completely_empty_rejected(self):
+        """Record with absolutely no data should be rejected."""
+        record = {"raw_data": {}}
+        assert _validate_location(record, "Delhi", None) is False
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

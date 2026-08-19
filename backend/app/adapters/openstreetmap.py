@@ -199,14 +199,14 @@ class OpenStreetMapAdapter(SourceAdapter):
                 await _asyncio.sleep(2 * (attempt + 1))
         return None
 
-    def _build_tags(self, query: str) -> list[tuple[str, str]]:
-        """Build Overpass tags from the user's query.
+    def _build_tag_groups(self, query: str) -> list[list[tuple[str, str]]]:
+        """Build Overpass tag groups from the user's query.
         
-        The user's query text IS the search — we do NOT restrict to
-        predefined OSM tags. For known categories, we add structured
-        tags as hints. For ALL categories, we always include a name-based
-        search so OSM never returns zero just because a tag mapping is missing.
+        The user's query text IS the search. For known categories, we use
+        structured OSM tags (fast, precise). For unknown categories, we use
+        name-based search (flexible, works for any category).
         """
+        import re
         q_lower = query.lower().strip()
 
         # Remove location words if present
@@ -215,23 +215,96 @@ class OpenStreetMapAdapter(SourceAdapter):
                 q_lower = q_lower.split(sep, 1)[0].strip()
                 break
 
-        tags = []
+        tag_groups = []
 
-        # For known categories, add structured OSM tags as hints
+        # Check if this is a known category with structured OSM tags
         if q_lower in TAG_HINTS:
-            tags.extend(TAG_HINTS[q_lower])
+            # Known category: use structured tags ONLY (no name filter)
+            # This is fast and returns all matching OSM entities
+            tag_groups.append(TAG_HINTS[q_lower])
         else:
-            # Try partial matches from TAG_HINTS
-            for key, tag_list in TAG_HINTS.items():
-                if key in q_lower or q_lower in key:
-                    tags.extend(tag_list)
-                    break
+            # Unknown category: use name-based search
+            # This works for ANY category without predefined mappings
+            name_regex = f".*{re.escape(q_lower)}.*"
+            tag_groups.append([("name", name_regex)])
 
-        # ALWAYS include a name-based search using the user's query text
-        # This ensures OSM never returns zero for unknown categories
-        tags.append(("name", f"(?i){re.escape(q_lower)}"))
+        return tag_groups
 
-        return tags
+    def _build_tags(self, query: str) -> list[tuple[str, str]]:
+        """Backward-compatible method: returns flattened tags for testing."""
+        tag_groups = self._build_tag_groups(query)
+        # Flatten all groups
+        flat_tags = []
+        for group in tag_groups:
+            flat_tags.extend(group)
+        return flat_tags
+
+    def _to_posix_case_insensitive(self, pattern: str) -> str:
+        """Convert a simple string pattern to POSIX case-insensitive regex.
+        
+        Converts 'spa' to '[Ss][Pp][Aa]' and '.*spa.*' to '.*[Ss][Pp][Aa].*'
+        """
+        import re
+        # Replace each alphabetic character with [upper][lower] pair
+        def replace_char(match):
+            char = match.group(0)
+            if char.isalpha():
+                return f'[{char.upper()}{char.lower()}]'
+            return char
+        
+        # Apply to alphabetic sequences, preserve regex metacharacters
+        result = ""
+        i = 0
+        while i < len(pattern):
+            if pattern[i].isalpha():
+                # Find consecutive alphabetic characters
+                j = i
+                while j < len(pattern) and pattern[j].isalpha():
+                    j += 1
+                alpha_seq = pattern[i:j]
+                for ch in alpha_seq:
+                    result += f'[{ch.upper()}{ch.lower()}]'
+                i = j
+            else:
+                result += pattern[i]
+                i += 1
+        return result
+
+    def _build_overpass_query(self, tag_groups: list[list[tuple[str, str]]], lat: float, lon: float, radius: int) -> str:
+        """Build Overpass QL query from tag groups using UNION for OR logic."""
+        subqueries = []
+        for group in tag_groups:
+            tag_filters = ""
+            for k, v in group:
+                # Detect regex patterns: contains regex metacharacters
+                is_regex = any(c in v for c in ".*+?^$[]()|{}")
+                if is_regex:
+                    # Convert to POSIX case-insensitive regex
+                    posix_pattern = self._to_posix_case_insensitive(v)
+                    tag_filters += f'["{k}"~"{posix_pattern}"]'
+                elif v.startswith("~"):
+                    # Explicit regex marker (legacy)
+                    posix_pattern = self._to_posix_case_insensitive(v[1:])
+                    tag_filters += f'["{k}"~"{posix_pattern}"]'
+                else:
+                    # Exact match
+                    tag_filters += f'["{k}"="{v}"]'
+            
+            subqueries.append(f"""
+              node{tag_filters}(around:{radius},{lat},{lon});
+              way{tag_filters}(around:{radius},{lat},{lon});
+              relation{tag_filters}(around:{radius},{lat},{lon});
+            """)
+        
+        union_query = "\n".join(subqueries)
+        overpass_ql = f"""
+        [out:json][timeout:60];
+        (
+          {union_query}
+        );
+        out center body;
+        """
+        return overpass_ql
 
     async def search(
         self,
@@ -251,31 +324,16 @@ class OpenStreetMapAdapter(SourceAdapter):
             return []
 
         lat, lon, radius = geo
-        tags = self._build_tags(query)
-
-        # Build Overpass QL query
-        tag_filters = "".join(
-            f'["{k}"="{v}"]' if not v.startswith("~") else f'["{k}"~"{v[1:]}"]'
-            for k, v in tags
-        )
-
-        overpass_ql = f"""
-        [out:json][timeout:60];
-        (
-          node{tag_filters}(around:{radius},{lat},{lon});
-          way{tag_filters}(around:{radius},{lat},{lon});
-          relation{tag_filters}(around:{radius},{lat},{lon});
-        );
-        out center body;
-        """
+        tag_groups = self._build_tag_groups(query)
+        overpass_ql = self._build_overpass_query(tag_groups, lat, lon, radius)
 
         # Try multiple Overpass mirrors for reliability
         data = None
         for mirror_url in OVERPASS_MIRRORS:
             try:
-                resp = await self.client.get(
+                resp = await self.client.post(
                     mirror_url,
-                    params={"data": overpass_ql},
+                    data={"data": overpass_ql},
                     headers={"User-Agent": "ValLG/1.0"},
                     timeout=60.0,
                 )
@@ -290,15 +348,24 @@ class OpenStreetMapAdapter(SourceAdapter):
             logger.error("All Overpass mirrors failed")
             return []
 
-        elements = data.get("elements", [])[:limit]
+        elements = data.get("elements", [])
 
-        # Convert OSM elements to our raw record format
+        # Convert OSM elements to our raw record format with deduplication
         records = []
+        seen_ids = set()
         for el in elements:
             tags_data = el.get("tags", {})
             name = tags_data.get("name", "")
             if not name:
                 continue
+
+            # Deduplicate by OSM ID + type
+            osm_id = el.get("id")
+            osm_type = el.get("type")
+            dedup_key = f"{osm_type}:{osm_id}"
+            if dedup_key in seen_ids:
+                continue
+            seen_ids.add(dedup_key)
 
             # Get coordinates
             el_lat = el.get("lat") or el.get("center", {}).get("lat")
@@ -312,8 +379,8 @@ class OpenStreetMapAdapter(SourceAdapter):
             address = ", ".join(addr_parts) if addr_parts else ""
 
             record = {
-                "osm_id": el.get("id"),
-                "osm_type": el.get("type"),
+                "osm_id": osm_id,
+                "osm_type": osm_type,
                 "name": name,
                 "address": address,
                 "phone": tags_data.get("phone") or tags_data.get("contact:phone"),
@@ -326,6 +393,8 @@ class OpenStreetMapAdapter(SourceAdapter):
                 "all_tags": tags_data,
             }
             records.append(record)
+            if len(records) >= limit:
+                break
 
         return records
 

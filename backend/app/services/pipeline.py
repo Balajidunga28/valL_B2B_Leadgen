@@ -223,14 +223,14 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     """Validate that a record matches the requested location.
     
     Accepts records that:
-    1. Have no location data at all (adapter already scoped)
+    1. Have no location data at all (adapter already scoped the search)
     2. Have city/state/address matching the requested location
     3. Have coordinates within ~50km of the requested city center
-    4. Have no city data but have a state match
+    4. Have a business name (real businesses have names, even without address)
     
-    Rejects records that:
-    - Have city data that clearly doesn't match and isn't in geographic vicinity
-    - Have no business data at all (no phone, no address, no city) — likely noise/web articles
+    Rejects only records that:
+    - Have explicit city data that clearly doesn't match AND no coords nearby
+    - Have absolutely no useful data (no name, no phone, no address, no coords)
     """
     if not city and not state:
         return True
@@ -241,15 +241,11 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
     has_address = bool(raw.get("address"))
     has_coords = bool(raw.get("latitude") and raw.get("longitude"))
     has_phone = bool(raw.get("phone"))
+    has_name = bool(raw.get("name"))
 
-    # If record has no location data and no useful business data, reject — likely noise
-    if not has_city_data and not has_state_data and not has_address and not has_coords and not has_phone:
+    # If record has absolutely no useful data, reject — likely noise
+    if not has_name and not has_phone and not has_address and not has_coords:
         return False
-
-    # If record has no location data but has a phone (actual business), accept
-    if not has_city_data and not has_state_data and not has_address and not has_coords:
-        if has_phone:
-            return True
 
     # Build comprehensive text for matching
     text = " ".join([
@@ -273,6 +269,19 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
         if city_lower in text:
             return True
 
+        # Fuzzy city match: "new delhi" matches "delhi", "south delhi" matches "delhi"
+        if has_city_data:
+            record_city = (raw.get("city") or "").lower().strip()
+            if record_city:
+                # Check if either city contains the other
+                if city_lower in record_city or record_city in city_lower:
+                    return True
+                # Check shared words: "new delhi" and "delhi" share "delhi"
+                city_words = set(city_lower.split())
+                record_city_words = set(record_city.split())
+                if city_words & record_city_words:
+                    return True
+
         if state_lower and state_lower in text:
             return True
 
@@ -285,13 +294,14 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
                 if dist < LOCATION_MATCH_RADIUS_DEGREES:
                     return True
 
-        # Reject records with explicit city data that doesn't match
+        # Reject records with explicit city data that doesn't match at all
         if has_city_data:
             record_city = (raw.get("city") or "").lower().strip()
             if record_city and record_city != city_lower:
+                # Already checked fuzzy match above — if we're here, it's a real mismatch
                 return False
 
-        # For records without city data, accept if no evidence of wrong location
+        # For records without city data, accept if they have business data
         if not has_city_data:
             return True
 
