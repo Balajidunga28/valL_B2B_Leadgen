@@ -121,8 +121,11 @@ class WebSearchAdapter(SourceAdapter):
         await asyncio.sleep(random.uniform(self.delay_min, self.delay_max))
 
     # --- httpx fallback: parse Bing search HTML ---
-    async def _search_bing_httpx(self, query: str, page_num: int = 0) -> list[dict[str, Any]]:
-        """Fallback: fetch Bing search via httpx and parse HTML."""
+    async def _search_bing_httpx(self, query: str, page_num: int = 0, location: str | None = None) -> list[dict[str, Any]]:
+        """Fallback: fetch Bing search via httpx and parse HTML.
+        
+        When location is provided, validates that results mention the location.
+        """
         offset = page_num * 10
         url = f"{BING_SEARCH_URL}?q={quote_plus(query)}&first={offset + 1}"
         headers = {
@@ -150,6 +153,15 @@ class WebSearchAdapter(SourceAdapter):
                 snippet = snippet_el.get_text(strip=True) if snippet_el else ""
                 link = title_el.get("href", "")
                 combined = f"{title} {snippet}"
+
+                # Geographic validation: when location specified, require it in results
+                if location and len(location) >= 3:
+                    loc_lower = location.lower()
+                    combined_lower = combined.lower()
+                    link_lower = link.lower()
+                    if loc_lower not in combined_lower and loc_lower not in link_lower:
+                        continue
+
                 phones = _extract_phones(combined)
                 name = _extract_business_name_from_snippet(title, snippet)
                 if name:
@@ -239,7 +251,7 @@ class WebSearchAdapter(SourceAdapter):
             if self._has_playwright and self._browser:
                 search_results = await self._search_bing(st)
             else:
-                search_results = await self._search_bing_httpx(st)
+                search_results = await self._search_bing_httpx(st, location=loc)
             await self._rate_limit()
             for sr in search_results:
                 name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
