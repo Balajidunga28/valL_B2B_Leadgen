@@ -148,7 +148,19 @@ class OpenStreetMapAdapter(SourceAdapter):
         super().__init__(api_key=None)
 
     async def _geocode(self, location: str) -> tuple[float, float, float] | None:
-        """Geocode a location string to (lat, lon, radius_meters)."""
+        """Geocode a location string to (lat, lon, radius_meters).
+        
+        First checks CITY_COORDS for known cities to avoid Nominatim rate limits.
+        Falls back to Nominatim API with retry logic.
+        """
+        from app.geo import CITY_COORDS, get_coords_for_city
+
+        # Check known cities first (no API call needed)
+        coords = get_coords_for_city(location.lower().strip())
+        if coords:
+            lat, lon = coords
+            return lat, lon, 15000  # 15km default radius for known cities
+
         import asyncio as _asyncio
         for attempt in range(3):
             try:
