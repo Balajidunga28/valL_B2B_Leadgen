@@ -162,16 +162,20 @@ def check_category_relevance(record: dict, category: str) -> bool:
         return True
 
     raw = record.get("raw_data", {})
-    meta = raw.get("metadata")
-    meta_str = "" if meta is None or meta == {} else str(meta)
+    # Build text from INTRINSIC business fields only.
+    # Exclude metadata (contains search_query which creates circular reference).
+    # Exclude industry if it matches the category (adapters set it from query).
+    industry_raw = raw.get("industry") or ""
+    industry_lower = industry_raw.lower().strip()
+    cat_lower = category.lower().strip()
+    # Only include industry in relevance text if it differs from the category
+    # (meaning it reflects the actual business type, not the query)
+    include_industry = industry_lower and industry_lower != cat_lower
     text = " ".join([
         raw.get("name") or "",
-        raw.get("industry") or "",
+        industry_raw if include_industry else "",
         raw.get("address") or "",
         raw.get("city") or "",
-        raw.get("source_url") or "",
-        raw.get("maps_url") or "",
-        meta_str,
     ]).lower()
 
     if not text.strip():

@@ -554,6 +554,117 @@ class TestCategoryContamination:
         assert check_category_relevance(solar, "solar companies") is True
 
 
+class TestAdapterOutputRelevance:
+    """V3: Simulate real adapter output and verify relevance filtering.
+    
+    web_search and google_search adapters set industry from the query category
+    and include search_query in metadata. These must NOT defeat the relevance
+    filter — only intrinsic business data (name, actual industry, address)
+    should determine relevance.
+    """
+
+    def _make_web_record(self, name, industry, address="Toronto"):
+        """Simulate a web_search adapter record."""
+        return {
+            "raw_data": {
+                "name": name,
+                "industry": industry,
+                "address": address,
+                "city": "Toronto",
+                "phone": "+14165551234",
+                "source_url": "https://example.com",
+                "metadata": {
+                    "extraction_method": "web_search",
+                    "search_query": "bakeries in Toronto business phone address contact",
+                },
+            }
+        }
+
+    def test_bakery_query_rejects_clothing_with_query_industry(self):
+        """Clothing store with industry='bakeries' (from query) must be rejected."""
+        rec = self._make_web_record("Fashion World Clothing", "bakeries")
+        assert check_category_relevance(rec, "bakeries") is False
+
+    def test_bakery_query_rejects_restaurant_with_query_industry(self):
+        """Restaurant with industry='bakeries' (from query) must be rejected."""
+        rec = self._make_web_record("Pizza Hut Toronto", "bakeries")
+        assert check_category_relevance(rec, "bakeries") is False
+
+    def test_bakery_query_accepts_real_bakery_with_query_industry(self):
+        """Actual bakery with industry='bakeries' (from query) must be accepted."""
+        rec = self._make_web_record("Cake Palace Bakery", "bakeries")
+        assert check_category_relevance(rec, "bakeries") is True
+
+    def test_bakery_query_rejects_clothing_with_real_industry(self):
+        """Clothing store with industry='retail' must be rejected for bakeries."""
+        rec = self._make_web_record("Fashion World Clothing", "retail")
+        assert check_category_relevance(rec, "bakeries") is False
+
+    def test_bakery_query_accepts_real_bakery_with_real_industry(self):
+        """Actual bakery with industry='food' must be accepted for bakeries."""
+        rec = self._make_web_record("Cake Palace Bakery", "food")
+        assert check_category_relevance(rec, "bakeries") is True
+
+    def test_clothing_query_rejects_bakery(self):
+        """Bakery must NOT appear in 'clothing shops' results."""
+        rec = self._make_web_record("Cake Palace Bakery", "clothing shops")
+        assert check_category_relevance(rec, "clothing shops") is False
+
+    def test_clothing_query_accepts_real_clothing(self):
+        """Actual clothing store must appear in 'clothing shops' results."""
+        rec = self._make_web_record("Fashion Hub Clothing", "clothing shops")
+        assert check_category_relevance(rec, "clothing shops") is True
+
+    def test_metadata_search_query_not_used_for_matching(self):
+        """metadata.search_query must NOT be used for relevance matching.
+        
+        This is the core V3 fix — the search_query in metadata creates a
+        circular reference where every record passes the relevance check.
+        """
+        # Record with NO name matching category, industry matching category
+        # but the ONLY reason it matches is metadata.search_query
+        rec = {
+            "raw_data": {
+                "name": "Generic Business Corp",
+                "industry": "bakeries",
+                "address": "123 Main St",
+                "metadata": {
+                    "extraction_method": "web_search",
+                    "search_query": "bakeries in Toronto business phone address contact",
+                },
+            }
+        }
+        # "bakeries" is in industry AND metadata.search_query
+        # But "bakeries" matches industry (which equals category, so excluded from text)
+        # And metadata.search_query is NOT in the text
+        # "Generic Business Corp" has no bakery-related words → should be rejected
+        assert check_category_relevance(rec, "bakeries") is False
+
+    def test_osm_industry_used_for_matching(self):
+        """OSM records use real industry (from OSM tags) for matching."""
+        rec = {
+            "raw_data": {
+                "name": "Goodies Bakery",
+                "industry": "bakery",
+                "address": "123 Dundas St",
+                "metadata": {"extraction_method": "openstreetmap"},
+            }
+        }
+        assert check_category_relevance(rec, "bakeries") is True
+
+    def test_osm_unrelated_rejected(self):
+        """OSM records with unrelated industry are rejected."""
+        rec = {
+            "raw_data": {
+                "name": "Pizza Pizza",
+                "industry": "restaurant",
+                "address": "456 Queen St",
+                "metadata": {"extraction_method": "openstreetmap"},
+            }
+        }
+        assert check_category_relevance(rec, "bakeries") is False
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
