@@ -128,11 +128,17 @@ class TestNoKeywordAllowlist:
         # This should be rejected because: no word overlap, no contact info
         assert result is False, f"Expected irrelevant record to be rejected, got {result}"
 
-    def test_record_with_contact_info_accepted(self):
-        """Records with contact info are plausibly real businesses — accept them."""
+    def test_record_with_contact_info_accepted_if_no_category_match(self):
+        """Records with contact info are accepted even without category word overlap.
+        
+        Adapters (Bing, OSM, IndiaMART) already filter by relevance via their
+        own search queries. A record with a phone number or address is a real
+        business and should be kept. Only records with NO contact data AND no
+        word overlap are rejected.
+        """
         record = {"raw_data": {"name": "Best Business Corp", "phone": "+1234567890", "address": "456 Commerce St"}}
         result = check_category_relevance(record, "hospitals")
-        # Has contact info — plausibly a real business, accept
+        # Has contact info — accepted as a real business even without word overlap
         assert result is True, f"Expected record with contact info to be accepted, got {result}"
 
     def test_empty_record_passes(self):

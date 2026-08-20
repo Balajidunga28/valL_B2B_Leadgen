@@ -301,9 +301,12 @@ def _validate_location(record: dict, city: str | None, state: str | None) -> boo
                 # Already checked fuzzy match above — if we're here, it's a real mismatch
                 return False
 
-        # For records without city data, accept if they have business data
+        # For records without city data, accept if they have address, phone, or coords
+        # A name alone is not enough location evidence to place in a specific city
         if not has_city_data:
-            return True
+            if has_address or has_phone or has_coords:
+                return True
+            return False
 
         return False
 
