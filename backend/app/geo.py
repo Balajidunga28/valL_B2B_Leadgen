@@ -146,22 +146,22 @@ def get_category_synonyms(category: str) -> list[str]:
 
 def check_category_relevance(record: dict, category: str) -> bool:
     """Check if a record is plausibly relevant to the requested category.
-    
-    This is a PERMISSIVE filter — it only rejects records that are clearly
-    unrelated. It does NOT use any predefined keyword allowlist. The user's
-    query determines what is relevant, not a hardcoded category map.
-    
+
+    This is a TARGETED filter — it rejects records that are clearly unrelated
+    to the requested category. It does NOT use any predefined keyword allowlist.
+    The user's query determines what is relevant, not a hardcoded category map.
+
     Strategy:
     - Fail-open: if we can't determine relevance, accept the record
-    - Accept if ANY word from the category appears as a WHOLE WORD in the record text
-    - Accept empty/unstructured records (let other filters handle quality)
-    - Only reject if record has text but ZERO whole-word overlap with category
+    - Extract domain-specific words from category (skip generic business words)
+    - Accept if ANY domain-specific category word matches the record text
+    - For purely generic categories (e.g., just "shops"), accept broadly
+    - Reject records with no category word overlap when category has domain words
     """
     if not category:
         return True
 
     raw = record.get("raw_data", {})
-    # Build text from record fields, exclude metadata dict repr
     meta = raw.get("metadata")
     meta_str = "" if meta is None or meta == {} else str(meta)
     text = " ".join([
@@ -174,70 +174,73 @@ def check_category_relevance(record: dict, category: str) -> bool:
         meta_str,
     ]).lower()
 
-    # Fail-open: no text data means we can't judge relevance
     if not text.strip():
         return True
 
-    # Extract meaningful words from the category (skip tiny/generic words)
-    cat_words = set(re.findall(r"[a-zA-Z]{3,}", category.lower()))
-    # Skip generic prepositions/articles AND generic business suffixes
-    # These words appear in many business names but don't indicate category
-    generic_words = {
+    # Words that appear in many business types but don't indicate a specific category
+    GENERIC_WORDS = {
         "the", "and", "for", "with", "near", "around", "from", "that", "this",
         "shop", "shops", "store", "stores", "center", "centre", "company",
         "companies", "business", "services", "service", "solutions",
         "enterprises", "industries", "traders", "dealers", "distributors",
         "suppliers", "agency", "agencies", "group", "associates", "partners",
+        "rental", "rentals", "hire", "hiring", "suppliers", "provider",
+        "providers", "consulting", "consultants", "management",
     }
-    cat_words -= generic_words
-    if not cat_words:
+
+    all_cat_words = set(re.findall(r"[a-zA-Z]{3,}", category.lower()))
+    domain_words = all_cat_words - GENERIC_WORDS
+
+    # Purely generic category (e.g., "shops", "stores") — accept broadly
+    if not domain_words:
         return True
 
-    # Extract whole words from record text for boundary-aware matching
     text_words = set(re.findall(r"[a-zA-Z]{3,}", text))
 
-    # Accept if ANY category word appears as a WHOLE WORD in record text
-    for cw in cat_words:
-        # Exact whole-word match
-        if re.search(rf"\b{re.escape(cw)}\b", text):
+    def _word_matches(cat_word: str) -> bool:
+        """Check if a category word matches the record text (with stem matching)."""
+        if re.search(rf"\b{re.escape(cat_word)}\b", text):
             return True
-        if cw in text_words:
+        if cat_word in text_words:
             return True
-
-        # Singular/plural stem match: "spas" matches "spa", "restaurants" matches "restaurant"
-        # Strip trailing "s" from either side and check whole-word match
-        stem = cw.rstrip("s") if cw.endswith("s") and len(cw) > 3 else cw
-        if stem != cw:
-            # Category word is plural (e.g., "spas"), check singular in text
+        # Stem matching: handle plurals
+        # "pharmacies" -> "pharmacy", "restaurants" -> "restaurant", "spas" -> "spa"
+        stem = cat_word
+        if cat_word.endswith("ies") and len(cat_word) > 4:
+            stem = cat_word[:-3] + "y"
+        elif cat_word.endswith("es") and len(cat_word) > 3:
+            stem = cat_word[:-2]
+        elif cat_word.endswith("s") and not cat_word.endswith("ss") and len(cat_word) > 3:
+            stem = cat_word[:-1]
+        if stem != cat_word:
             if re.search(rf"\b{re.escape(stem)}\b", text):
                 return True
             if stem in text_words:
                 return True
-        # Also try adding "s" if category word is singular (e.g., "spa" -> check "spas" in text)
-        if not cw.endswith("s"):
-            plural = cw + "s"
-            if re.search(rf"\b{re.escape(plural)}\b", text):
-                return True
-            if plural in text_words:
-                return True
+        # Try plural forms for singular category words
+        if not cat_word.endswith("s"):
+            for suffix in ["s", "es", "ies"]:
+                plural = cat_word + suffix
+                if re.search(rf"\b{re.escape(plural)}\b", text):
+                    return True
+                if plural in text_words:
+                    return True
+        return False
 
-    # No whole-word overlap found.
-    # Accept records with real business contact data (phone or address)
-    # even without category word overlap — adapters already filter by relevance.
-    phone = (raw.get("phone") or "").strip()
-    address = (raw.get("address") or "").strip()
-    if phone or address:
-        return True
+    for dw in domain_words:
+        if _word_matches(dw):
+            return True
 
-    # No overlap AND no contact data — check if record has analyzable content
+    # No domain word matched. Accept only if record has no analyzable text
+    # (fail-open for empty/minimal records). Reject records that have a name
+    # or industry — they are real businesses in a different category.
     name = (raw.get("name") or "").strip()
     industry = (raw.get("industry") or "").strip()
-    has_analyzable_content = bool(name or industry)
+    has_content = bool(name or industry)
 
-    if not has_analyzable_content:
+    if not has_content:
         return True
 
-    # Record has text but NO word overlap AND no contact data — reject
     return False
 
 

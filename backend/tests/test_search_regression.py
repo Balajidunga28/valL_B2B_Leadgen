@@ -92,11 +92,11 @@ class TestNoKeywordAllowlist:
 
     def test_arbitrary_categories_accepted(self):
         """ALL categories from the 12 queries must be accepted by relevance check."""
-        # Records that contain at least one word from the category should pass
+        # Records that contain at least one domain-specific word from the category should pass
         test_cases = [
             # (category, record_name, record_industry, expected)
             ("hospitals", "City Hospital", "healthcare", True),
-            ("restaurants", "Pizza Palace", "food", True),
+            ("restaurants", "Pizza Palace Restaurant", "food", True),
             ("parks", "Green Valley Park", "recreation", True),
             ("medical stores", "Health Plus Medical Store", "pharmacy", True),
             ("pharmacies", "MedPlus Pharmacy", "pharmaceutical", True),
@@ -108,11 +108,11 @@ class TestNoKeywordAllowlist:
             ("startups", "TechVenture Startup", "technology", True),
             ("clothing shops", "Fashion World Clothing", "retail", True),
             # Categories NOT in any predefined list — must still work
-            ("architects", "Studio Arch Design", "architecture", True),
-            ("tutoring centers", "Math Guru Tutoring", "education", True),
-            ("interior designers", "Luxe Interiors Design", "design", True),
-            ("photographers", "SnapShot Photography", "photography", True),
-            ("plumbers", "Quick Fix Plumbing", "services", True),
+            ("architects", "Best Architects Studio", "architecture", True),
+            ("tutoring centers", "Math Guru Tutoring Center", "education", True),
+            ("interior designers", "Luxe Interior Designers", "design", True),
+            ("photographers", "SnapShot Photographer", "photography", True),
+            ("plumbers", "Quick Fix Plumbers", "services", True),
             ("dog walkers", "Happy Paws Dog Walking", "pets", True),
         ]
         for category, name, industry, expected in test_cases:
@@ -128,18 +128,17 @@ class TestNoKeywordAllowlist:
         # This should be rejected because: no word overlap, no contact info
         assert result is False, f"Expected irrelevant record to be rejected, got {result}"
 
-    def test_record_with_contact_info_accepted_if_no_category_match(self):
-        """Records with contact info are accepted even without category word overlap.
+    def test_record_with_contact_info_rejected_if_no_category_match(self):
+        """Records with contact info but no category word overlap are rejected.
         
-        Adapters (Bing, OSM, IndiaMART) already filter by relevance via their
-        own search queries. A record with a phone number or address is a real
-        business and should be kept. Only records with NO contact data AND no
-        word overlap are rejected.
+        The old behavior accepted any record with a phone/address regardless of
+        category. This caused contamination: sweet shops appearing in clothing
+        searches because they have phone numbers. Now, records must match at
+        least one domain-specific category word.
         """
         record = {"raw_data": {"name": "Best Business Corp", "phone": "+1234567890", "address": "456 Commerce St"}}
         result = check_category_relevance(record, "hospitals")
-        # Has contact info — accepted as a real business even without word overlap
-        assert result is True, f"Expected record with contact info to be accepted, got {result}"
+        assert result is False, f"Expected unrelated record to be rejected, got {result}"
 
     def test_empty_record_passes(self):
         """Empty records should pass (fail-open)."""
@@ -178,10 +177,10 @@ class TestCategoryRelevance:
         record = {"raw_data": {"name": "Sunny Pharmacy", "industry": "health", "address": "123 Medical Rd"}}
         assert check_category_relevance(record, "medical stores") is True
 
-    def test_no_overlap_with_contact_accepted(self):
-        """Record with no word overlap but with contact info is accepted (real business)."""
+    def test_no_overlap_with_contact_rejected(self):
+        """Record with no word overlap AND contact info is rejected when category has domain words."""
         record = {"raw_data": {"name": "Best Business Corp", "phone": "+1234567890", "address": "456 St"}}
-        assert check_category_relevance(record, "hospitals") is True
+        assert check_category_relevance(record, "hospitals") is False
 
     def test_no_overlap_no_contact_rejected(self):
         """Record with no word overlap AND no contact info is rejected (likely junk)."""
@@ -362,6 +361,197 @@ class TestLocationFuzzy:
         """Record with absolutely no data should be rejected."""
         record = {"raw_data": {}}
         assert _validate_location(record, "Delhi", None) is False
+
+
+class TestCategoryContamination:
+    """Regression tests: category contamination must be rejected.
+    
+    When searching for a specific category, unrelated businesses must NOT
+    appear in results just because they share generic words like "shop",
+    "store", or have contact information.
+    """
+
+    def test_clothing_shops_rejects_sweet_shops(self):
+        """Sweet shops must NOT appear in 'clothing shops' results."""
+        sweet_shop = {
+            "raw_data": {
+                "name": "Sri Venkateswara Sweets & Namkeen",
+                "industry": "food",
+                "address": "MG Road, Hyderabad",
+                "phone": "+919876543210",
+                "city": "Hyderabad",
+            }
+        }
+        assert check_category_relevance(sweet_shop, "clothing shops") is False
+
+    def test_clothing_shops_rejects_bakeries(self):
+        """Bakeries must NOT appear in 'clothing shops' results."""
+        bakery = {
+            "raw_data": {
+                "name": "Cake Palace Bakery",
+                "industry": "food",
+                "address": "Banjara Hills, Hyderabad",
+                "phone": "+919876543211",
+                "city": "Hyderabad",
+            }
+        }
+        assert check_category_relevance(bakery, "clothing shops") is False
+
+    def test_clothing_shops_rejects_hospitals(self):
+        """Hospitals must NOT appear in 'clothing shops' results."""
+        hospital = {
+            "raw_data": {
+                "name": "Apollo Hospital",
+                "industry": "healthcare",
+                "address": "Jubilee Hills, Hyderabad",
+                "phone": "+919876543212",
+                "city": "Hyderabad",
+            }
+        }
+        assert check_category_relevance(hospital, "clothing shops") is False
+
+    def test_clothing_shops_rejects_hotels(self):
+        """Hotels must NOT appear in 'clothing shops' results."""
+        hotel = {
+            "raw_data": {
+                "name": "Taj Hotel Hyderabad",
+                "industry": "hospitality",
+                "address": "Tank Bund, Hyderabad",
+                "phone": "+919876543213",
+                "city": "Hyderabad",
+            }
+        }
+        assert check_category_relevance(hotel, "clothing shops") is False
+
+    def test_clothing_shops_accepts_actual_clothing(self):
+        """Actual clothing businesses MUST appear in 'clothing shops' results."""
+        clothing_cases = [
+            {"raw_data": {"name": "Fashion World Clothing", "industry": "retail", "address": "Hyderabad"}},
+            {"raw_data": {"name": "Trendy Wear Shop", "industry": "clothing", "address": "Hyderabad"}},
+            {"raw_data": {"name": "Men's Clothing Outlet", "industry": "fashion", "address": "Hyderabad"}},
+            {"raw_data": {"name": "Clothing Paradise", "industry": "retail", "address": "Hyderabad"}},
+            {"raw_data": {"name": "Textile Gallery", "industry": "clothing", "address": "Hyderabad"}},
+        ]
+        for rec in clothing_cases:
+            result = check_category_relevance(rec, "clothing shops")
+            assert result is True, f"Clothing record '{rec['raw_data']['name']}' was rejected"
+
+    def test_hotels_rejects_restaurants(self):
+        """Restaurants must NOT appear in 'hotels' results."""
+        restaurant = {
+            "raw_data": {
+                "name": "Biryani House",
+                "industry": "food",
+                "address": "Hyderabad",
+                "phone": "+919876543214",
+            }
+        }
+        assert check_category_relevance(restaurant, "hotels") is False
+
+    def test_hotels_accepts_actual_hotels(self):
+        """Actual hotels MUST appear in 'hotels' results."""
+        hotel = {
+            "raw_data": {
+                "name": "Grand Hotel Hyderabad",
+                "industry": "hospitality",
+                "address": "Hyderabad",
+            }
+        }
+        assert check_category_relevance(hotel, "hotels") is True
+
+    def test_pharmacies_rejects_clothing(self):
+        """Clothing stores must NOT appear in 'pharmacies' results."""
+        clothing = {
+            "raw_data": {
+                "name": "Fashion Hub",
+                "industry": "retail",
+                "address": "Hyderabad",
+                "phone": "+919876543215",
+            }
+        }
+        assert check_category_relevance(clothing, "pharmacies") is False
+
+    def test_pharmacies_accepts_actual_pharmacies(self):
+        """Actual pharmacies MUST appear in 'pharmacies' results."""
+        pharmacy = {
+            "raw_data": {
+                "name": "MedPlus Pharmacy",
+                "industry": "pharmaceutical",
+                "address": "Hyderabad",
+            }
+        }
+        assert check_category_relevance(pharmacy, "pharmacies") is True
+
+    def test_generic_category_accepts_broadly(self):
+        """Purely generic categories (e.g., 'shops') should accept broadly."""
+        any_business = {
+            "raw_data": {
+                "name": "Any Business Shop",
+                "industry": "retail",
+                "address": "Hyderabad",
+                "phone": "+919876543216",
+            }
+        }
+        assert check_category_relevance(any_business, "shops") is True
+        assert check_category_relevance(any_business, "stores") is True
+        assert check_category_relevance(any_business, "companies") is True
+
+    def test_empty_record_always_passes(self):
+        """Empty records always pass (fail-open)."""
+        empty = {"raw_data": {}}
+        assert check_category_relevance(empty, "clothing shops") is True
+        assert check_category_relevance(empty, "hospitals") is True
+
+    def test_record_without_name_or_industry_passes(self):
+        """Records with no name/industry pass (can't judge relevance)."""
+        minimal = {"raw_data": {"phone": "+919876543217", "address": "Hyderabad"}}
+        assert check_category_relevance(minimal, "clothing shops") is True
+
+    def test_spa_rejects_unrelated(self):
+        """Unrelated businesses must NOT appear in 'spa' results."""
+        unrelated = {
+            "raw_data": {
+                "name": "Computer Repair Shop",
+                "industry": "technology",
+                "address": "Delhi",
+                "phone": "+919876543218",
+            }
+        }
+        assert check_category_relevance(unrelated, "spa") is False
+
+    def test_spa_accepts_actual_spa(self):
+        """Actual spas MUST appear in 'spa' results."""
+        spa = {
+            "raw_data": {
+                "name": "Bliss Wellness Spa",
+                "industry": "wellness",
+                "address": "Delhi",
+            }
+        }
+        assert check_category_relevance(spa, "spa") is True
+
+    def test_solar_companies_rejects_food(self):
+        """Food businesses must NOT appear in 'solar companies' results."""
+        food = {
+            "raw_data": {
+                "name": "Domino's Pizza",
+                "industry": "food",
+                "address": "Delhi",
+                "phone": "+919876543219",
+            }
+        }
+        assert check_category_relevance(food, "solar companies") is False
+
+    def test_solar_companies_accepts_actual_solar(self):
+        """Actual solar businesses MUST appear in 'solar companies' results."""
+        solar = {
+            "raw_data": {
+                "name": "SunPower Solar Solutions",
+                "industry": "energy",
+                "address": "Delhi",
+            }
+        }
+        assert check_category_relevance(solar, "solar companies") is True
 
 
 if __name__ == "__main__":
