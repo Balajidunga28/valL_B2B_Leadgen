@@ -17,6 +17,9 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+SOURCE_TIMEOUT = 30.0
+OVERALL_EXTRACTION_TIMEOUT = 60.0
+
 from app.adapters.google_places import GooglePlacesAdapter
 from app.adapters.google_search import GoogleSearchAdapter
 from app.adapters.openstreetmap import OpenStreetMapAdapter
@@ -390,11 +393,32 @@ async def run_extraction(
             effective_location = parsed_loc
             logger.info(f"Parsed location '{effective_location}' from query: {query}")
 
+    async def _extract_with_timeout(name: str, adapter, query: str, location: str | None, limit: int):
+        try:
+            return await asyncio.wait_for(
+                _extract_from_source(name, adapter, query, location, limit),
+                timeout=SOURCE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Source {name} timed out after {SOURCE_TIMEOUT}s")
+            try:
+                await adapter.close()
+            except Exception:
+                pass
+            return name, [], f"Timeout after {SOURCE_TIMEOUT}s"
+
     tasks = [
-        _extract_from_source(name, adapters[name], query, effective_location, extraction_limit)
+        _extract_with_timeout(name, adapters[name], query, effective_location, extraction_limit)
         for name in adapters
     ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=OVERALL_EXTRACTION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Overall extraction timed out after {OVERALL_EXTRACTION_TIMEOUT}s")
+        results = []
 
     source_counts: dict[str, int] = {}
     errors = []

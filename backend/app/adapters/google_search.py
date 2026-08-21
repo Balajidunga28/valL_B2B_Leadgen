@@ -209,8 +209,8 @@ class GoogleSearchAdapter(SourceAdapter):
                 break
         return records[:limit]
 
-    # --- Playwright path (unchanged) ---
-    async def _scroll_results_panel(self, page, max_scrolls: int = 25):
+    # --- Playwright path (optimized) ---
+    async def _scroll_results_panel(self, page, max_scrolls: int = 10):
         selector = 'div[role="feed"]'
         panel = await page.query_selector(selector)
         if not panel:
@@ -221,7 +221,7 @@ class GoogleSearchAdapter(SourceAdapter):
                 """(sel) => { const el = document.querySelector(sel); if (el) el.scrollTop = el.scrollHeight; }""",
                 selector,
             )
-            await page.wait_for_timeout(1200)
+            await page.wait_for_timeout(800)
             items = await page.query_selector_all('div[role="feed"] > div > div > a[href*="/maps/place"]')
             if len(items) == prev_count:
                 break
@@ -372,9 +372,9 @@ class GoogleSearchAdapter(SourceAdapter):
         # Primary: use the original user query as-is (most important)
         search_queries.append(query.strip())
 
-        # Add scope+variation combinations
-        for scope in scopes:
-            for var in variations[:2]:
+        # Add scope+variation combinations (limit to 2 additional queries)
+        for scope in scopes[:1]:  # Only use first scope
+            for var in variations[:1]:  # Only use first variation
                 q = f"{var} in {scope}" if scope else var
                 if q not in search_queries:
                     search_queries.append(q)
@@ -382,21 +382,41 @@ class GoogleSearchAdapter(SourceAdapter):
         all_records: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
 
-        for i, sq in enumerate(search_queries):
-            remaining = limit - len(all_records)
-            if remaining <= 0:
-                break
-            if self._has_playwright and self._browser:
-                records = await self._search_single_query(sq, remaining + 10, extracted_at)
-            else:
-                records = await self._search_httpx(sq, remaining + 10, extracted_at)
-            for rec in records:
-                dk = _dedup_key(rec)
-                if dk not in seen_keys:
-                    seen_keys.add(dk)
-                    all_records.append(rec)
-            if i < len(search_queries) - 1:
-                await self._rate_limit()
+        if self._has_playwright and self._browser:
+            # Playwright path: run sequentially (browser resource constraints)
+            # but reduce scrolls and queries
+            for i, sq in enumerate(search_queries):
+                remaining = limit - len(all_records)
+                if remaining <= 0:
+                    break
+                records = await self._search_single_query(sq, remaining + 5, extracted_at)
+                for rec in records:
+                    dk = _dedup_key(rec)
+                    if dk not in seen_keys:
+                        seen_keys.add(dk)
+                        all_records.append(rec)
+                if i < len(search_queries) - 1:
+                    await self._rate_limit()
+        else:
+            # httpx fallback: run queries concurrently for speed
+            async def search_one(sq: str, remaining: int):
+                return await self._search_httpx(sq, remaining + 5, extracted_at)
+
+            tasks = [search_one(sq, limit - len(all_records)) for sq in search_queries]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for result in results:
+                if isinstance(result, Exception):
+                    continue
+                for rec in result:
+                    dk = _dedup_key(rec)
+                    if dk not in seen_keys:
+                        seen_keys.add(dk)
+                        all_records.append(rec)
+                    if len(all_records) >= limit:
+                        break
+                if len(all_records) >= limit:
+                    break
 
         logger.info(f"Google Maps total: {len(all_records)} unique from {len(search_queries)} queries")
         return all_records[:limit]

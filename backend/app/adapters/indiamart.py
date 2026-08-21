@@ -200,16 +200,31 @@ class IndiaMARTAdapter(SourceAdapter):
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
 
-        for cat_slug in category_slugs[:2]:
-            if self._has_playwright and self._browser:
+        if self._has_playwright and self._browser:
+            # Playwright path: run sequentially (browser resource constraints)
+            for cat_slug in category_slugs[:2]:
                 records = await self._search_category(cat_slug, city, extracted_at)
-            else:
-                records = await self._search_category_httpx(cat_slug, city, extracted_at)
-            for rec in records:
-                name_key = re.sub(r"[^a-z0-9]", "", (rec.get("name") or "").lower())
-                if name_key and name_key not in seen_names and len(name_key) > 2:
-                    seen_names.add(name_key)
-                    all_records.append(rec)
+                for rec in records:
+                    name_key = re.sub(r"[^a-z0-9]", "", (rec.get("name") or "").lower())
+                    if name_key and name_key not in seen_names and len(name_key) > 2:
+                        seen_names.add(name_key)
+                        all_records.append(rec)
+        else:
+            # httpx fallback: run category searches concurrently
+            async def search_one(cat_slug: str):
+                return await self._search_category_httpx(cat_slug, city, extracted_at)
+
+            tasks = [search_one(slug) for slug in category_slugs[:2]]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, Exception):
+                    continue
+                for rec in result:
+                    name_key = re.sub(r"[^a-z0-9]", "", (rec.get("name") or "").lower())
+                    if name_key and name_key not in seen_names and len(name_key) > 2:
+                        seen_names.add(name_key)
+                        all_records.append(rec)
 
         logger.info(f"IndiaMART total: {len(all_records)} unique for category '{category}'")
         return all_records[:limit]

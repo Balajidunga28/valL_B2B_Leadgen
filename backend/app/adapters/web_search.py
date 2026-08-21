@@ -225,49 +225,81 @@ class WebSearchAdapter(SourceAdapter):
         category, loc = _parse_query(query, location)
         extracted_at = datetime.now(timezone.utc).isoformat()
 
-        # Build dynamic search terms based on user query
+        # Build dynamic search terms based on user query (limit to 2 terms)
         search_terms = []
         if loc:
             search_terms.append(f"{category} {loc} business phone address contact")
-            search_terms.append(f"{category} {loc} business directory listing")
-            # Use the raw user query directly
             search_terms.append(query.strip())
         else:
             search_terms.append(f"{category} business phone address contact")
-            search_terms.append(f"{category} business directory listing")
             search_terms.append(query.strip())
 
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
-        for st in search_terms:
-            if self._has_playwright and self._browser:
+
+        if self._has_playwright and self._browser:
+            # Playwright path: run sequentially (browser resource constraints)
+            for st in search_terms:
                 search_results = await self._search_bing(st)
-            else:
-                search_results = await self._search_bing_httpx(st, location=loc)
-            await self._rate_limit()
-            for sr in search_results:
-                name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
-                if name_key in seen_names or len(name_key) < 3:
-                    continue
-                seen_names.add(name_key)
-                record = {
-                    "name": sr["name"], "phone": sr.get("phone"),
-                    "address": None, "website": None, "maps_url": None,
-                    "category": category if category else None,
-                    "latitude": None, "longitude": None,
-                    "rating": None, "reviews_count": None, "opening_hours": None,
-                    "source_url": sr.get("source_url"),
-                    "_provenance": {
-                        "search_query": st, "search_url": sr.get("source_url", ""),
-                        "extracted_at": extracted_at, "extraction_method": "web_search",
-                        "source_type": "bing_results",
-                    },
-                }
-                all_records.append(record)
+                await self._rate_limit()
+                for sr in search_results:
+                    name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
+                    if name_key in seen_names or len(name_key) < 3:
+                        continue
+                    seen_names.add(name_key)
+                    record = {
+                        "name": sr["name"], "phone": sr.get("phone"),
+                        "address": None, "website": None, "maps_url": None,
+                        "category": category if category else None,
+                        "latitude": None, "longitude": None,
+                        "rating": None, "reviews_count": None, "opening_hours": None,
+                        "source_url": sr.get("source_url"),
+                        "_provenance": {
+                            "search_query": st, "search_url": sr.get("source_url", ""),
+                            "extracted_at": extracted_at, "extraction_method": "web_search",
+                            "source_type": "bing_results",
+                        },
+                    }
+                    all_records.append(record)
+                    if len(all_records) >= limit:
+                        break
                 if len(all_records) >= limit:
                     break
-            if len(all_records) >= limit:
-                break
+        else:
+            # httpx fallback: run search terms concurrently for speed
+            async def search_one(st: str):
+                return await self._search_bing_httpx(st, location=loc)
+
+            tasks = [search_one(st) for st in search_terms]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in results:
+                if isinstance(result, Exception):
+                    continue
+                for sr in result:
+                    name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
+                    if name_key in seen_names or len(name_key) < 3:
+                        continue
+                    seen_names.add(name_key)
+                    record = {
+                        "name": sr["name"], "phone": sr.get("phone"),
+                        "address": None, "website": None, "maps_url": None,
+                        "category": category if category else None,
+                        "latitude": None, "longitude": None,
+                        "rating": None, "reviews_count": None, "opening_hours": None,
+                        "source_url": sr.get("source_url"),
+                        "_provenance": {
+                            "search_query": sr.get("search_query", ""), "search_url": sr.get("source_url", ""),
+                            "extracted_at": extracted_at, "extraction_method": "web_search",
+                            "source_type": "bing_results",
+                        },
+                    }
+                    all_records.append(record)
+                    if len(all_records) >= limit:
+                        break
+                if len(all_records) >= limit:
+                    break
+
         logger.info(f"Web search total: {len(all_records)} unique from {len(search_terms)} queries")
         return all_records[:limit]
 

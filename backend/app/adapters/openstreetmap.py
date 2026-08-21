@@ -7,6 +7,7 @@ About:
   default built-in source when no paid API keys are configured.
 """
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -23,6 +24,8 @@ OVERPASS_MIRRORS = [
     "https://overpass-api.openstreetmap.ru/api/interpreter",
 ]
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+_GEOCODE_CACHE: dict[str, tuple[float, float, float] | None] = {}
 
 # Map common search terms to OSM tag queries
 TAG_HINTS = {
@@ -152,61 +155,65 @@ class OpenStreetMapAdapter(SourceAdapter):
         """Geocode a location string to (lat, lon, radius_meters).
         
         First checks CITY_COORDS for known cities to avoid Nominatim rate limits.
-        Falls back to Nominatim API with retry logic.
+        Falls back to Nominatim API with retry logic. Uses in-memory cache.
         """
         from app.geo import CITY_COORDS, get_coords_for_city
 
+        loc_key = location.lower().strip()
+        
+        # Check cache first
+        if loc_key in _GEOCODE_CACHE:
+            return _GEOCODE_CACHE[loc_key]
+
         # Check known cities first (no API call needed)
-        coords = get_coords_for_city(location.lower().strip())
+        coords = get_coords_for_city(loc_key)
         if coords:
             lat, lon = coords
-            return lat, lon, 15000  # 15km default radius for known cities
+            result = (lat, lon, 15000)
+            _GEOCODE_CACHE[loc_key] = result
+            return result
 
-        import asyncio as _asyncio
-        for attempt in range(3):
-            try:
-                resp = await self.client.get(
-                    NOMINATIM_URL,
-                    params={"q": location, "format": "json", "limit": 1},
-                    headers={"User-Agent": "ValLG/1.0 (leadgen-app)"},
-                )
-                if resp.status_code == 429:
-                    wait = 2 * (attempt + 1)
-                    logger.warning(f"Nominatim rate limited, waiting {wait}s...")
-                    await _asyncio.sleep(wait)
-                    continue
-                resp.raise_for_status()
-                results = resp.json()
-                if not results:
-                    return None
-                r = results[0]
-                lat = float(r["lat"])
-                lon = float(r["lon"])
-                if "boundingbox" in r:
-                    bb = [float(x) for x in r["boundingbox"]]
-                    lat_span = abs(bb[2] - bb[0])
-                    lon_span = abs(bb[3] - bb[1])
-                    radius = max(lat_span, lon_span) * 111_000 / 2
-                    radius = max(radius, 5000)
-                    radius = min(radius, 50000)
-                else:
-                    radius = 10000
-                return lat, lon, radius
-            except Exception as e:
-                if attempt == 2:
-                    logger.error(f"Geocode failed after 3 attempts: {e}")
-                    return None
-                await _asyncio.sleep(2 * (attempt + 1))
-        return None
+        # Single attempt with shorter timeout for Nominatim
+        try:
+            resp = await self.client.get(
+                NOMINATIM_URL,
+                params={"q": location, "format": "json", "limit": 1},
+                headers={"User-Agent": "ValLG/1.0 (leadgen-app)"},
+                timeout=10.0,
+            )
+            if resp.status_code == 429:
+                logger.warning("Nominatim rate limited")
+                return None
+            resp.raise_for_status()
+            results = resp.json()
+            if not results:
+                _GEOCODE_CACHE[loc_key] = None
+                return None
+            r = results[0]
+            lat = float(r["lat"])
+            lon = float(r["lon"])
+            if "boundingbox" in r:
+                bb = [float(x) for x in r["boundingbox"]]
+                lat_span = abs(bb[2] - bb[0])
+                lon_span = abs(bb[3] - bb[1])
+                radius = max(lat_span, lon_span) * 111_000 / 2
+                radius = max(radius, 5000)
+                radius = min(radius, 50000)
+            else:
+                radius = 10000
+            result = (lat, lon, radius)
+            _GEOCODE_CACHE[loc_key] = result
+            return result
+        except Exception as e:
+            logger.warning(f"Geocode failed for '{location}': {e}")
+            _GEOCODE_CACHE[loc_key] = None
+            return None
 
     def _build_tag_groups(self, query: str) -> list[list[tuple[str, str]]]:
         """Build Overpass tag groups from the user's query.
         
-        The user's query text IS the search. We ALWAYS include a name-based
-        search for maximum coverage. For known categories, we ALSO add
-        structured OSM tags as an additional search group (UNION/OR logic).
-        This ensures we never return zero results just because a business
-        isn't tagged with the expected OSM tag.
+        For known categories, use structured OSM tags (fast).
+        For unknown categories, add name-based search as fallback (slower but broader).
         """
         import re
         q_lower = query.lower().strip()
@@ -222,11 +229,11 @@ class OpenStreetMapAdapter(SourceAdapter):
         # Group 1: Structured OSM tags for known categories (if any)
         if q_lower in TAG_HINTS:
             tag_groups.append(TAG_HINTS[q_lower])
-
-        # Group 2: ALWAYS include name-based search using the user's query text
-        # Use simple lowercase pattern - _build_overpass_query will convert to POSIX regex
-        name_regex = q_lower
-        tag_groups.append([("name", name_regex)])
+        else:
+            # Group 2: For unknown categories, include name-based search as fallback
+            # Use simple lowercase pattern - _build_overpass_query will convert to POSIX regex
+            name_regex = q_lower
+            tag_groups.append([("name", name_regex)])
 
         return tag_groups
 
@@ -310,7 +317,7 @@ class OpenStreetMapAdapter(SourceAdapter):
         
         union_query = "\n".join(subqueries)
         overpass_ql = f"""
-        [out:json][timeout:60];
+        [out:json][timeout:30];
         (
           {union_query}
         );
@@ -339,22 +346,50 @@ class OpenStreetMapAdapter(SourceAdapter):
         tag_groups = self._build_tag_groups(query)
         overpass_ql = self._build_overpass_query(tag_groups, lat, lon, radius)
 
-        # Try multiple Overpass mirrors for reliability
-        data = None
-        for mirror_url in OVERPASS_MIRRORS:
+        # Try mirrors concurrently, return first successful response
+        async def try_mirror(mirror_url: str):
             try:
                 resp = await self.client.post(
                     mirror_url,
                     data={"data": overpass_ql},
                     headers={"User-Agent": "ValLG/1.0"},
-                    timeout=60.0,
+                    timeout=45.0,
                 )
                 resp.raise_for_status()
-                data = resp.json()
-                break
+                return resp.json()
             except Exception as e:
-                logger.warning(f"Overpass mirror {mirror_url} failed: {e}")
-                continue
+                logger.debug(f"Overpass mirror {mirror_url} failed: {e}")
+                return None
+
+        # Use asyncio.wait with FIRST_COMPLETED to get fastest successful response
+        tasks = {asyncio.create_task(try_mirror(url)): url for url in OVERPASS_MIRRORS}
+        
+        data = None
+        while tasks:
+            done, tasks = await asyncio.wait(tasks, timeout=50.0, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    result = task.result()
+                    if isinstance(result, dict) and result is not None:
+                        data = result
+                        # Cancel remaining tasks
+                        for t in tasks:
+                            t.cancel()
+                        tasks = {}
+                        break
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+            if data is not None:
+                break
+        
+        # If no result and timed out, cancel all
+        if data is None:
+            for t in tasks:
+                t.cancel()
+            logger.error("All Overpass mirrors failed or timed out")
+            return []
 
         if data is None:
             logger.error("All Overpass mirrors failed")
