@@ -27,6 +27,9 @@ USER_AGENTS = [
 
 BING_SEARCH_URL = "https://www.bing.com/search"
 
+PER_LISTING_TIMEOUT = 10.0
+MAX_RESULTS_PER_QUERY = 50
+
 
 def _parse_query(query: str, location: str | None) -> tuple[str, str]:
     """Parse query into (category, location). Location param overrides query location."""
@@ -198,7 +201,9 @@ class WebSearchAdapter(SourceAdapter):
                 });
                 return data;
             }""")
-            for r in raw_results:
+            for i, r in enumerate(raw_results):
+                if i >= MAX_RESULTS_PER_QUERY:
+                    break
                 title = r.get("title", "")
                 snippet = r.get("snippet", "")
                 url = r.get("url", "")
@@ -222,17 +227,10 @@ class WebSearchAdapter(SourceAdapter):
 
     async def search(self, query: str, location: str | None = None, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         await self._ensure_browser()
-        category, loc = _parse_query(query, location)
         extracted_at = datetime.now(timezone.utc).isoformat()
 
-        # Build dynamic search terms based on user query (limit to 2 terms)
-        search_terms = []
-        if loc:
-            search_terms.append(f"{category} {loc} business phone address contact")
-            search_terms.append(query.strip())
-        else:
-            search_terms.append(f"{category} business phone address contact")
-            search_terms.append(query.strip())
+        # The user's query IS the search — no modification
+        search_terms = [query.strip()]
 
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()

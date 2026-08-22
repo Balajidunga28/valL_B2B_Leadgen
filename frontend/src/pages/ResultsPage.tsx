@@ -9,8 +9,8 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { apiClient } from '../api/client';
-import { Card, Button, PageHeader, EmptyState, Skeleton } from '../components/ui';
+import { apiClient, downloadFile } from '../api/client';
+import { Card, Button, PageHeader, EmptyState, Skeleton, Badge } from '../components/ui';
 import type { Lead } from '../types';
 
 const SOURCE_MAP: Record<string, { label: string; color: string }> = {
@@ -53,6 +53,18 @@ function ValidationBadge({ status }: { status: string | null }) {
     <span className={`inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium rounded border ${colors[status] || 'bg-dark-600 text-dark-200 border-dark-500'}`}>
       {status}
     </span>
+  );
+}
+
+function SavedBadge({ saved }: { saved: boolean }) {
+  if (!saved) return null;
+  return (
+    <Badge variant="success" className="flex items-center gap-1">
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z" />
+      </svg>
+      Saved
+    </Badge>
   );
 }
 
@@ -126,39 +138,26 @@ export default function ResultsPage() {
 
   const activeFilterCount = [filterMinScore, filterMaxScore, filterIndustry, filterCity, filterHasPhone, filterHasEmail, filterValidation].filter(f => f !== '' && f !== null).length;
 
-  function buildExportUrl(): string {
-    const params = new URLSearchParams();
-    if (filterMinScore) params.set('min_score', filterMinScore);
-    if (filterMaxScore) params.set('max_score', filterMaxScore);
-    if (filterIndustry) params.set('industry', filterIndustry);
-    if (filterCity) params.set('city', filterCity);
-    if (filterHasPhone !== null) params.set('has_phone', filterHasPhone!.toString());
-    if (filterHasEmail !== null) params.set('has_email', filterHasEmail!.toString());
-    if (filterValidation) params.set('validation_status', filterValidation);
-    return `${import.meta.env.VITE_API_URL || '/api'}/level7/export/csv?${params}`;
-  }
+function buildExportUrl(): string {
+  const params = new URLSearchParams();
+  if (filterMinScore) params.set('min_score', filterMinScore);
+  if (filterMaxScore) params.set('max_score', filterMaxScore);
+  if (filterIndustry) params.set('industry', filterIndustry);
+  if (filterCity) params.set('city', filterCity);
+  if (filterHasPhone !== null) params.set('has_phone', filterHasPhone!.toString());
+  if (filterHasEmail !== null) params.set('has_email', filterHasEmail!.toString());
+  if (filterValidation) params.set('validation_status', filterValidation);
+  if (searchId) params.set('pipeline_run_id', searchId);
+  return `${import.meta.env.VITE_API_URL || '/api'}/export/csv?${params}`;
+}
 
-  function handleExport() {
-    const token = localStorage.getItem('vallg_token');
-    fetch(buildExportUrl(), {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error('Export failed');
-        return res.blob();
-      })
-      .then((blob) => {
-        const blobUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = `vallg_leads_${new Date().toISOString().slice(0, 10)}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(blobUrl);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Export failed'));
+async function handleExport() {
+  try {
+    downloadFile(buildExportUrl(), `vallg_leads_${new Date().toISOString().slice(0, 10)}.csv`);
+  } catch (err) {
+    setError(err instanceof Error ? err.message : 'Export failed');
   }
+}
 
   function clearFilters() {
     setFilterMinScore('');
@@ -358,6 +357,7 @@ export default function ResultsPage() {
                     <th className="px-3 py-3 text-left text-xs font-semibold text-dark-200 uppercase tracking-wider">Rating</th>
                     <th className="px-3 py-3 text-left text-xs font-semibold text-dark-200 uppercase tracking-wider">Source</th>
                     <th className="px-3 py-3 text-left text-xs font-semibold text-dark-200 uppercase tracking-wider">Validation</th>
+                    <th className="px-3 py-3 text-left text-xs font-semibold text-dark-200 uppercase tracking-wider">Saved</th>
                     <th className="px-3 py-3 text-left text-xs font-semibold text-dark-200 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
@@ -413,6 +413,9 @@ export default function ResultsPage() {
                         </td>
                         <td className="px-3 py-3">
                           <ValidationBadge status={lead.validation_status} />
+                        </td>
+                        <td className="px-3 py-3">
+                          <SavedBadge saved={lead.is_saved} />
                         </td>
                         <td className="px-3 py-3 text-sm">
                           <div className="flex items-center gap-2">

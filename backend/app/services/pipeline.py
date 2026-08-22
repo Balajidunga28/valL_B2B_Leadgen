@@ -19,9 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 SOURCE_TIMEOUT = 30.0
 OVERALL_EXTRACTION_TIMEOUT = 60.0
+PER_LISTING_TIMEOUT = 10.0
+MAX_LISTINGS_PER_SOURCE = 200
 
 from app.adapters.google_places import GooglePlacesAdapter
 from app.adapters.google_search import GoogleSearchAdapter
+from app.adapters.google_maps_scraper import GoogleMapsScraperAdapter
 from app.adapters.openstreetmap import OpenStreetMapAdapter
 from app.adapters.web_search import WebSearchAdapter
 from app.adapters.indiamart import IndiaMARTAdapter
@@ -44,13 +47,14 @@ logger = logging.getLogger(__name__)
 ADAPTERS = {
     "google_places": GooglePlacesAdapter,
     "google_search": GoogleSearchAdapter,
+    "google_maps_scraper": GoogleMapsScraperAdapter,
     "openstreetmap": OpenStreetMapAdapter,
     "web_search": WebSearchAdapter,
     "indiamart": IndiaMARTAdapter,
     "justdial": JustDialAdapter,
 }
 
-FREE_SOURCES = {"openstreetmap", "google_search", "web_search", "indiamart", "justdial"}
+FREE_SOURCES = {"openstreetmap", "google_search", "google_maps_scraper", "web_search", "indiamart", "justdial"}
 
 
 def _extract_location_from_query(query: str) -> str | None:
@@ -327,8 +331,10 @@ def _estimate_completeness(lead: dict) -> float:
 
 
 async def _extract_from_source(source_name: str, adapter, query: str, location: str | None, limit: int) -> tuple[str, list[dict], str | None]:
+    """Extract records from a source using the user's exact query."""
     try:
         raw_records = await adapter.search(query=query, location=location, limit=limit)
+        
         normalized = []
         for rec in raw_records:
             n = adapter.normalize(rec)
@@ -357,6 +363,11 @@ async def run_extraction(
     sources: list[str],
     limit: int,
 ) -> PipelineRun:
+    # Extract location from query if not explicitly provided
+    effective_location = location or _extract_location_from_query(query)
+    
+    logger.info(f"Query: '{query}', location: '{effective_location}'")
+
     run = PipelineRun(
         id=uuid4(),
         organization_id=organization_id,
@@ -364,7 +375,7 @@ async def run_extraction(
         query_text=query,
         query_params={
             "query": query,
-            "location": location,
+            "location": effective_location,
             "sources": sources,
             "limit": limit,
         },
@@ -383,15 +394,7 @@ async def run_extraction(
         except ValueError as e:
             logger.warning(f"Source {source_name} not available: {e}")
 
-    extraction_limit = max(limit, 200)
-
-    # If no explicit location, try to extract from query text
-    effective_location = location
-    if not effective_location:
-        parsed_loc = _extract_location_from_query(query)
-        if parsed_loc:
-            effective_location = parsed_loc
-            logger.info(f"Parsed location '{effective_location}' from query: {query}")
+    extraction_limit = min(max(limit, 200), MAX_LISTINGS_PER_SOURCE)
 
     async def _extract_with_timeout(name: str, adapter, query: str, location: str | None, limit: int):
         try:
@@ -406,6 +409,13 @@ async def run_extraction(
             except Exception:
                 pass
             return name, [], f"Timeout after {SOURCE_TIMEOUT}s"
+        except Exception as e:
+            logger.error(f"Source {name} failed with error: {e}")
+            try:
+                await adapter.close()
+            except Exception:
+                pass
+            return name, [], f"Error: {str(e)[:200]}"
 
     tasks = [
         _extract_with_timeout(name, adapters[name], query, effective_location, extraction_limit)
@@ -446,8 +456,8 @@ async def run_extraction(
         state = parts[1].strip() if len(parts) > 1 else None
 
     stored_count = 0
+    # The user's query IS the category — no predefined extraction
     category = _extract_category_from_query(query)
-    logger.info(f"Extracted category: '{category}' from query: '{query}'")
 
     for result in results:
         if isinstance(result, Exception):

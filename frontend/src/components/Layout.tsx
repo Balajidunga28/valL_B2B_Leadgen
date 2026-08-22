@@ -8,7 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Outlet, Link, useLocation } from 'react-router-dom';
+import { Outlet, Link, useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 const navItems: Array<{
@@ -53,6 +53,15 @@ const navItems: Array<{
     ),
   },
   {
+    path: '/discovery',
+    label: 'Discovery',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+      </svg>
+    ),
+  },
+  {
     path: '/directories',
     label: 'Directories',
     icon: (
@@ -83,7 +92,7 @@ const navItems: Array<{
 ];
 
 export default function Layout() {
-  const { user, loading, logout } = useAuth();
+  const { user, authChecked, logout } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -102,7 +111,8 @@ export default function Layout() {
     return () => { document.body.style.overflow = ''; };
   }, [mobileOpen]);
 
-  if (loading) {
+  // Brief loading state only while checking auth token validity
+  if (!authChecked) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-dark-950">
         <div className="flex flex-col items-center gap-3">
@@ -114,7 +124,7 @@ export default function Layout() {
   }
 
   if (!user) {
-    return <RedirectToLogin />;
+    return <Navigate to="/login" replace />;
   }
 
   return (
@@ -244,18 +254,6 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
-    </div>
-  );
-}
-
-function RedirectToLogin() {
-  window.location.href = '/login';
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-dark-950">
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-        <span className="text-sm text-dark-200 font-medium">Redirecting to login...</span>
-      </div>
     </div>
   );
 }

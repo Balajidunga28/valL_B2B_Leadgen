@@ -9,24 +9,22 @@ import { apiClient } from './client';
 import type { AuthResponse, User } from '../types';
 
 export async function login(email: string, password: string): Promise<AuthResponse> {
-  const response = await apiClient.post<{ token: string }>('/auth/login', {
+  const response = await apiClient.post<{ token: string; user: User }>('/auth/login', {
     email,
     password,
   });
   localStorage.setItem('vallg_token', response.token);
-  const user = await getCurrentUser();
-  return { token: response.token, user };
+  return { token: response.token, user: response.user };
 }
 
 export async function signup(name: string, email: string, password: string): Promise<AuthResponse> {
-  const response = await apiClient.post<{ token: string }>('/auth/signup', {
+  const response = await apiClient.post<{ token: string; user: User }>('/auth/signup', {
     name,
     email,
     password,
   });
   localStorage.setItem('vallg_token', response.token);
-  const user = await getCurrentUser();
-  return { token: response.token, user };
+  return { token: response.token, user: response.user };
 }
 
 export async function logout(): Promise<void> {

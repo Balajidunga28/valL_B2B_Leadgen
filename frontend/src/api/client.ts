@@ -70,3 +70,38 @@ class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+
+// Helper function for downloading files (blob responses)
+export async function downloadFile(endpoint: string, filename?: string): Promise<void> {
+  const token = localStorage.getItem('vallg_token');
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!response.ok) {
+    let message = `HTTP ${response.status}: ${response.statusText}`;
+    try {
+      const body = await response.json();
+      message = body.detail || body.error?.message || body.message || message;
+    } catch {
+      // ignore parse error
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename || 'export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(blobUrl);
+}

@@ -204,40 +204,25 @@ class TestCategoryRelevance:
 
 
 class TestOSMTags:
-    """Test that OSM tag generation uses query text directly."""
+    """Test that OSM search always uses the user's query text directly."""
 
-    def test_known_category_gets_tags(self):
-        """Known categories get structured OSM tags."""
+    def test_all_queries_use_name_search(self):
+        """Every query goes straight to Overpass as a name regex — no mapping."""
         adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
-        tags = adapter._build_tags("restaurants in London")
-        # Should have amenity=restaurant tag
-        tag_keys = [k for k, v in tags]
-        assert "amenity" in tag_keys or "name" in tag_keys
-
-    def test_unknown_category_gets_name_search(self):
-        """Unknown categories ALWAYS get a name-based search."""
-        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
-        tags = adapter._build_tags("wedding halls in Hyderabad")
-        # Must have a name tag
-        tag_keys = [k for k, v in tags]
-        assert "name" in tag_keys, f"Unknown category must get name search, got: {tags}"
-
-    def test_novel_category_never_returns_empty(self):
-        """Arbitrary categories must never produce empty tag list."""
-        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
-        novel_queries = [
+        queries = [
+            "restaurants in London",
             "coworking spaces in Singapore",
-            "solar companies in Germany",
             "wedding halls in Hyderabad",
-            "petrol pumps in Bangalore",
-            "OYO hotels in Vijayawada",
+            "salons in Dubai",
             "photographers in Mumbai",
-            "interior designers in Delhi",
+            "architects in Delhi",
+            "plumbers in London",
+            "solar companies in Germany",
         ]
-        for query in novel_queries:
+        for query in queries:
             tags = adapter._build_tags(query)
-            assert len(tags) > 0, f"Query '{query}' produced empty tags"
-            assert "name" in [k for k, v in tags], f"Query '{query}' missing name search tag"
+            tag_keys = [k for k, v in tags]
+            assert "name" in tag_keys, f"Query '{query}' must use name-based search, got: {tags}"
 
 
 class TestLocationValidation:
@@ -292,19 +277,15 @@ class TestGeoUtilities:
         coords = get_coords_for_city("tiny_village_xyz")
         assert coords is None
 
-    def test_get_category_synonyms_no_group_lookup(self):
-        """Synonyms must NOT use predefined keyword groups."""
-        # Novel category must return at least the raw category
-        result = get_category_synonyms("wedding planners")
-        assert "wedding planners" in result
-        # Must not be restricted to a small predefined list
-        assert len(result) >= 1
-
-    def test_synonyms_singular_plural(self):
-        """Should generate singular/plural variations."""
+    def test_synonyms_returns_raw_query(self):
+        """Synonyms must return the raw query — no predefined variations."""
         result = get_category_synonyms("hospitals")
-        assert "hospitals" in result
-        assert "hospital" in result
+        assert result == ["hospitals"]
+
+    def test_synonyms_novel_category(self):
+        """Any category returns itself — no predefined groups."""
+        result = get_category_synonyms("wedding planners")
+        assert result == ["wedding planners"]
 
 
 class TestScoring:
@@ -663,6 +644,192 @@ class TestAdapterOutputRelevance:
             }
         }
         assert check_category_relevance(rec, "bakeries") is False
+
+
+class TestFlexibleQueryCategoryMatching:
+    """Test that arbitrary/unpredefined categories work with the relevance filter.
+    
+    Priority 1 requirement: unknown categories (salons, coworking, etc.)
+    must not be blocked by the relevance filter.
+    """
+
+    def test_salons_accepts_beauty_industry(self):
+        """'salons' query must accept record with industry='beauty'."""
+        rec = {"raw_data": {"name": "Glow Beauty Salon", "industry": "beauty", "address": "Dubai"}}
+        assert check_category_relevance(rec, "salons") is True
+
+    def test_salons_accepts_no_industry(self):
+        """'salons' query must accept record with no industry field."""
+        rec = {"raw_data": {"name": "Hair Studio", "address": "Dubai"}}
+        assert check_category_relevance(rec, "salons") is True
+
+    def test_coworking_accepts_office_industry(self):
+        """'coworking spaces' must accept office industry."""
+        rec = {"raw_data": {"name": "CoWork Hub", "industry": "office", "address": "Singapore"}}
+        assert check_category_relevance(rec, "coworking spaces") is True
+
+    def test_wedding_halls_accepts_events_industry(self):
+        """'wedding halls' must accept events industry."""
+        rec = {"raw_data": {"name": "Grand Banquet Hall", "industry": "events", "address": "Hyderabad"}}
+        assert check_category_relevance(rec, "wedding halls") is True
+
+    def test_photographers_accepts_photography_industry(self):
+        """'photographers' must accept photography industry."""
+        rec = {"raw_data": {"name": "SnapShot Studio", "industry": "photography", "address": "Mumbai"}}
+        assert check_category_relevance(rec, "photographers") is True
+
+    def test_interior_designers_accepts_design_industry(self):
+        """'interior designers' must accept design industry."""
+        rec = {"raw_data": {"name": "Luxe Interiors", "industry": "design", "address": "Delhi"}}
+        assert check_category_relevance(rec, "interior designers") is True
+
+    def test_plumbers_accepts_services_industry(self):
+        """'plumbers' must accept services industry."""
+        rec = {"raw_data": {"name": "Quick Fix Plumbing", "industry": "services", "address": "London"}}
+        assert check_category_relevance(rec, "plumbers") is True
+
+    def test_tutoring_centers_accepts_education_industry(self):
+        """'tutoring centers' must accept education industry."""
+        rec = {"raw_data": {"name": "Math Guru Academy", "industry": "education", "address": "Chennai"}}
+        assert check_category_relevance(rec, "tutoring centers") is True
+
+    def test_contamination_still_rejected(self):
+        """Cross-category contamination must still be rejected."""
+        # Food businesses in clothing searches
+        sweet_shop = {
+            "raw_data": {"name": "Sweet Corner", "industry": "food", "address": "Hyderabad"}
+        }
+        assert check_category_relevance(sweet_shop, "clothing shops") is False
+
+        # Restaurant in hospital searches
+        restaurant = {
+            "raw_data": {"name": "Pizza Place", "industry": "restaurant", "address": "Delhi"}
+        }
+        assert check_category_relevance(restaurant, "hospitals") is False
+
+    def test_empty_record_passes_for_novel_categories(self):
+        """Empty records always pass (fail-open)."""
+        empty = {"raw_data": {}}
+        assert check_category_relevance(empty, "coworking spaces") is True
+        assert check_category_relevance(empty, "wedding halls") is True
+        assert check_category_relevance(empty, "photographers") is True
+
+    def test_all_12_test_queries_accept_matching_records(self):
+        """All 12 test query categories must accept records with matching domain words."""
+        test_cases = [
+            ("hospitals", {"name": "City Hospital", "industry": "healthcare"}),
+            ("restaurants", {"name": "Pizza Palace", "industry": "food"}),
+            ("parks", {"name": "Green Park", "industry": "recreation"}),
+            ("medical stores", {"name": "Health Plus Medical", "industry": "pharmacy"}),
+            ("pharmacies", {"name": "MedPlus Pharmacy", "industry": "pharmaceutical"}),
+            ("OYO hotels", {"name": "OYO Townhouse", "industry": "hospitality"}),
+            ("petrol pumps", {"name": "HP Petrol Pump", "industry": "fuel"}),
+            ("wedding halls", {"name": "Grand Wedding Hall", "industry": "events"}),
+            ("solar companies", {"name": "SunPower Solar", "industry": "energy"}),
+            ("coworking spaces", {"name": "WeWork", "industry": "office"}),
+            ("startups", {"name": "TechVenture", "industry": "technology"}),
+            ("clothing shops", {"name": "Fashion World", "industry": "retail"}),
+        ]
+        for category, data in test_cases:
+            rec = {"raw_data": {**data, "address": "Test City"}}
+            result = check_category_relevance(rec, category)
+            assert result is True, f"Category '{category}' with record '{data['name']}' was rejected"
+
+
+class TestOSMTagExpansion:
+    """Test that ALL queries use name-based search — no predefined mappings."""
+
+    def test_all_queries_use_name_tag(self):
+        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
+        queries = [
+            "coworking spaces in Singapore",
+            "wedding halls in Hyderabad",
+            "photographers in Mumbai",
+            "architects in Delhi",
+            "plumbers in London",
+            "restaurants in London",
+            "hospitals in Rajahmundry",
+        ]
+        for query in queries:
+            tags = adapter._build_tags(query)
+            tag_keys = [k for k, v in tags]
+            assert "name" in tag_keys, f"Query '{query}' must use name search, got: {tags}"
+
+
+class TestOSMNameSearchVariations:
+    """Test that OSM always uses the raw query as name search."""
+
+    def test_query_goes_directly_to_overpass(self):
+        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
+        tag_groups = adapter._build_tag_groups("salons in Dubai")
+        # Should have exactly one group with the raw query as name pattern
+        all_name_patterns = []
+        for group in tag_groups:
+            for k, v in group:
+                if k == "name":
+                    all_name_patterns.append(v)
+        assert len(all_name_patterns) >= 1, f"Expected name patterns, got: {all_name_patterns}"
+        assert "salons" in all_name_patterns, f"Raw query 'salons' must be in patterns: {all_name_patterns}"
+
+    def test_no_structured_osm_tags(self):
+        adapter = OpenStreetMapAdapter.__new__(OpenStreetMapAdapter)
+        tag_groups = adapter._build_tag_groups("restaurants in London")
+        # Everything must be name-based — no amenity/shop/office tags
+        for group in tag_groups:
+            for k, v in group:
+                assert k == "name", f"Expected only name tags, got key '{k}'"
+
+
+class TestQueryFormatFlexibility:
+    """Test that same-intent query formats all resolve to the same category/location."""
+
+    def test_comma_format(self):
+        from app.services.query_interpretation import interpret_query
+        result = interpret_query("salons, Dubai")
+        assert result.category == "salons"
+        assert result.location == "Dubai"
+
+    def test_in_format(self):
+        from app.services.query_interpretation import interpret_query
+        result = interpret_query("salons in Dubai")
+        assert result.category == "salons"
+        assert result.location == "Dubai"
+
+    def test_adjacency_format(self):
+        from app.services.query_interpretation import interpret_query
+        result = interpret_query("salons Dubai")
+        assert result.category == "salons"
+        assert result.location == "Dubai"
+
+    def test_reversed_format(self):
+        from app.services.query_interpretation import interpret_query
+        result = interpret_query("Dubai salons")
+        assert result.category == "salons"
+        assert result.location == "Dubai"
+
+    def test_near_format(self):
+        from app.services.query_interpretation import interpret_query
+        result = interpret_query("salons near Dubai")
+        assert result.category == "salons"
+        assert result.location == "Dubai"
+
+    def test_all_formats_produce_same_category(self):
+        from app.services.query_interpretation import interpret_query
+        formats = [
+            "salons, Dubai",
+            "salons in Dubai",
+            "salons Dubai",
+            "Dubai salons",
+            "salons near Dubai",
+        ]
+        categories = set()
+        locations = set()
+        for fmt in formats:
+            r = interpret_query(fmt)
+            categories.add(r.category.lower())
+            locations.add(r.location.lower() if r.location else None)
+        assert len(categories) == 1, f"Different categories from same intent: {categories}"
+        assert len(locations) == 1, f"Different locations from same intent: {locations}"
 
 
 if __name__ == "__main__":

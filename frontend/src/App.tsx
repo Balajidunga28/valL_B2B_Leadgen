@@ -19,6 +19,7 @@ import SettingsPage from './pages/SettingsPage';
 import MapsPage from './pages/MapsPage';
 import DirectoriesPage from './pages/DirectoriesPage';
 import SourcesPage from './pages/SourcesPage';
+import DiscoveryPage from './pages/DiscoveryPage';
 import Layout from './components/Layout';
 
 function App() {
@@ -33,6 +34,7 @@ function App() {
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="dashboard" element={<DashboardPage />} />
             <Route path="search" element={<SearchPage />} />
+            <Route path="discovery" element={<DiscoveryPage />} />
             <Route path="results" element={<ResultsPage />} />
             <Route path="results/:recordId" element={<RecordDetailPage />} />
             <Route path="maps" element={<MapsPage />} />

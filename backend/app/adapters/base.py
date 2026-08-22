@@ -12,15 +12,28 @@ from typing import Any
 import httpx
 
 
+DEFAULT_HTTP_TIMEOUT = 30.0
+DEFAULT_HTTP_CONNECT_TIMEOUT = 10.0
+
+
 class SourceAdapter(ABC):
     """Base class for all data source adapters."""
 
     name: str = "base"
     display_name: str = "Base Source"
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, http_timeout: float = DEFAULT_HTTP_TIMEOUT):
         self.api_key = api_key
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                timeout=http_timeout,
+                connect=DEFAULT_HTTP_CONNECT_TIMEOUT,
+                read=http_timeout,
+                write=http_timeout,
+            ),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            follow_redirects=True,
+        )
 
     async def close(self):
         """Close the HTTP client."""

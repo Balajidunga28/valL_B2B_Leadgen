@@ -62,6 +62,7 @@ export interface Lead {
   latitude: number | null;
   longitude: number | null;
   source: string | null;
+  sources: string[];
   validation_status: string | null;
   enrichment_description: string | null;
   enrichment_email: string | null;
@@ -69,6 +70,7 @@ export interface Lead {
   total_score: number | null;
   score_version: string | null;
   scored_at: string | null;
+  is_saved: boolean;
 }
 
 // Pipeline run types

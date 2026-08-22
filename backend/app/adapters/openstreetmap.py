@@ -27,119 +27,7 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
 _GEOCODE_CACHE: dict[str, tuple[float, float, float] | None] = {}
 
-# Map common search terms to OSM tag queries
-TAG_HINTS = {
-    "restaurant": [("amenity", "restaurant")],
-    "restaurants": [("amenity", "restaurant")],
-    "cafe": [("amenity", "cafe")],
-    "coffee": [("amenity", "cafe")],
-    "coffee shop": [("amenity", "cafe")],
-    "hotel": [("tourism", "hotel")],
-    "hotels": [("tourism", "hotel")],
-    "pharmacy": [("amenity", "pharmacy")],
-    "pharmacies": [("amenity", "pharmacy")],
-    "drugstore": [("amenity", "pharmacy")],
-    "hospital": [("amenity", "hospital")],
-    "hospitals": [("amenity", "hospital")],
-    "clinic": [("amenity", "clinic")],
-    "clinics": [("amenity", "clinic")],
-    "dental": [("amenity", "dentist")],
-    "dentist": [("amenity", "dentist")],
-    "dentists": [("amenity", "dentist")],
-    "doctor": [("amenity", "doctor")],
-    "doctors": [("amenity", "doctor")],
-    "gym": [("leisure", "fitness_centre")],
-    "gyms": [("leisure", "fitness_centre")],
-    "fitness": [("leisure", "fitness_centre")],
-    "fitness centre": [("leisure", "fitness_centre")],
-    "fitness center": [("leisure", "fitness_centre")],
-    "health club": [("leisure", "fitness_centre")],
-    "shop": [("shop", "~.")],
-    "store": [("shop", "~.")],
-    "stores": [("shop", "~.")],
-    "shops": [("shop", "~.")],
-    "bank": [("amenity", "bank")],
-    "banks": [("amenity", "bank")],
-    "atm": [("amenity", "atm")],
-    "atms": [("amenity", "atm")],
-    "school": [("amenity", "school")],
-    "schools": [("amenity", "school")],
-    "college": [("amenity", "college")],
-    "colleges": [("amenity", "college")],
-    "university": [("amenity", "university")],
-    "office": [("office", "~.")],
-    "offices": [("office", "~.")],
-    "it": [("office", "IT")],
-    "it company": [("office", "IT")],
-    "it companies": [("office", "IT")],
-    "technology": [("office", "IT")],
-    "tech": [("office", "IT")],
-    "software": [("office", "IT")],
-    "software company": [("office", "IT")],
-    "software companies": [("office", "IT")],
-    "startup": [("office", "IT")],
-    "startups": [("office", "IT")],
-    "real estate": [("office", "estate_agent")],
-    "real estate agent": [("office", "estate_agent")],
-    "legal": [("office", "lawyer")],
-    "lawyer": [("office", "lawyer")],
-    "lawyers": [("office", "lawyer")],
-    "attorney": [("office", "lawyer")],
-    "advocate": [("office", "lawyer")],
-    "accounting": [("office", "accountant")],
-    "accountant": [("office", "accountant")],
-    "ca": [("office", "accountant")],
-    "spa": [("amenity", "spa")],
-    "spas": [("amenity", "spa")],
-    "salon": [("shop", "beauty")],
-    "salons": [("shop", "beauty")],
-    "beauty": [("shop", "beauty")],
-    "beauty salon": [("shop", "beauty")],
-    "beauty parlor": [("shop", "beauty")],
-    "electronics": [("shop", "electronics")],
-    "electronic": [("shop", "electronics")],
-    "grocery": [("shop", "supermarket")],
-    "grocery store": [("shop", "supermarket")],
-    "supermarket": [("shop", "supermarket")],
-    "supermarkets": [("shop", "supermarket")],
-    "pet": [("shop", "pet")],
-    "pet shop": [("shop", "pet")],
-    "pet store": [("shop", "pet")],
-    "car": [("shop", "car")],
-    "automobile": [("shop", "car")],
-    "vehicle": [("shop", "car")],
-    "auto": [("shop", "car")],
-    "clothing": [("shop", "clothes")],
-    "clothes": [("shop", "clothes")],
-    "fashion": [("shop", "clothes")],
-    "apparel": [("shop", "clothes")],
-    "manufacturer": [("craft", "manufacture")],
-    "manufacturers": [("craft", "manufacture")],
-    "factory": [("craft", "manufacture")],
-    "factories": [("craft", "manufacture")],
-    "bakery": [("amenity", "bakery")],
-    "bar": [("amenity", "bar")],
-    "pub": [("amenity", "pub")],
-    "nightclub": [("amenity", "nightclub")],
-    "fuel": [("amenity", "fuel")],
-    "gas station": [("amenity", "fuel")],
-    "parking": [("amenity", "parking")],
-    "cinema": [("amenity", "cinema")],
-    "theatre": [("amenity", "theatre")],
-    "theater": [("amenity", "theatre")],
-    "library": [("amenity", "library")],
-    "community centre": [("amenity", "community_centre")],
-    "community center": [("amenity", "community_centre")],
-    "marketplace": [("amenity", "marketplace")],
-    "market": [("amenity", "marketplace")],
-    "courier": [("office", "courier")],
-    "logistics": [("office", "logistics")],
-    "travel": [("office", "travel_agent")],
-    "travel agency": [("office", "travel_agent")],
-    "insurance": [("office", "insurance")],
-    "consulting": [("office", "consulting")],
-    "consultancy": [("office", "consulting")],
-}
+
 
 
 class OpenStreetMapAdapter(SourceAdapter):
@@ -212,10 +100,10 @@ class OpenStreetMapAdapter(SourceAdapter):
     def _build_tag_groups(self, query: str) -> list[list[tuple[str, str]]]:
         """Build Overpass tag groups from the user's query.
         
-        For known categories, use structured OSM tags (fast).
-        For unknown categories, add name-based search as fallback (slower but broader).
+        Always uses name-based search — the user's query text goes directly
+        to Overpass as a case-insensitive regex pattern. No predefined
+        category mappings or templates.
         """
-        import re
         q_lower = query.lower().strip()
 
         # Remove location words if present
@@ -226,14 +114,8 @@ class OpenStreetMapAdapter(SourceAdapter):
 
         tag_groups = []
 
-        # Group 1: Structured OSM tags for known categories (if any)
-        if q_lower in TAG_HINTS:
-            tag_groups.append(TAG_HINTS[q_lower])
-        else:
-            # Group 2: For unknown categories, include name-based search as fallback
-            # Use simple lowercase pattern - _build_overpass_query will convert to POSIX regex
-            name_regex = q_lower
-            tag_groups.append([("name", name_regex)])
+        # Always use name-based search — the query IS the search term
+        tag_groups.append([("name", q_lower)])
 
         return tag_groups
 
@@ -288,26 +170,35 @@ class OpenStreetMapAdapter(SourceAdapter):
         """Build Overpass QL query from tag groups using UNION for OR logic."""
         subqueries = []
         for group in tag_groups:
-            tag_filters = ""
+            # Group multiple values for the same key into a single regex with OR
+            # e.g., [("name", "salon"), ("name", "salons")] -> ["name"~"pattern1|pattern2"]
+            key_values: dict[str, list[str]] = {}
             for k, v in group:
-                # For name key, always use regex (case-insensitive substring match)
-                # For other keys, detect regex patterns: contains regex metacharacters
-                if k == "name":
-                    is_regex = True
-                else:
+                key_values.setdefault(k, []).append(v)
+            
+            tag_filters = ""
+            for key, values in key_values.items():
+                if key == "name":
+                    # Combine multiple name patterns into single regex with OR
+                    posix_patterns = [self._to_posix_case_insensitive(v) for v in values]
+                    combined = "|".join(posix_patterns)
+                    tag_filters += f'["{key}"~"{combined}"]'
+                elif len(values) == 1:
+                    v = values[0]
                     is_regex = any(c in v for c in ".*+?^$[]()|{}")
-                
-                if is_regex:
-                    # Convert to POSIX case-insensitive regex
-                    posix_pattern = self._to_posix_case_insensitive(v)
-                    tag_filters += f'["{k}"~"{posix_pattern}"]'
-                elif v.startswith("~"):
-                    # Explicit regex marker (legacy)
-                    posix_pattern = self._to_posix_case_insensitive(v[1:])
-                    tag_filters += f'["{k}"~"{posix_pattern}"]'
+                    if is_regex:
+                        posix_pattern = self._to_posix_case_insensitive(v)
+                        tag_filters += f'["{key}"~"{posix_pattern}"]'
+                    elif v.startswith("~"):
+                        posix_pattern = self._to_posix_case_insensitive(v[1:])
+                        tag_filters += f'["{key}"~"{posix_pattern}"]'
+                    else:
+                        tag_filters += f'["{key}"="{v}"]'
                 else:
-                    # Exact match
-                    tag_filters += f'["{k}"="{v}"]'
+                    # Multiple values for non-name key: combine with OR
+                    posix_patterns = [self._to_posix_case_insensitive(v) for v in values]
+                    combined = "|".join(posix_patterns)
+                    tag_filters += f'["{key}"~"{combined}"]'
             
             subqueries.append(f"""
               node{tag_filters}(around:{radius},{lat},{lon});

@@ -90,6 +90,9 @@ CITY_COORDS: dict[str, tuple[float, float]] = {
     "agra": (27.1767, 78.0081),
     "kanpur": (26.4499, 80.3319),
     "nashik": (19.9975, 73.7898),
+    "johannesburg": (-26.2041, 28.0473),
+    "cape town": (-33.9249, 18.4241),
+    "durban": (-29.8587, 31.0218),
 }
 
 GENERIC_BUSINESS_SUFFIXES: list[str] = [
@@ -127,21 +130,8 @@ def is_state_name(text: str) -> bool:
 
 
 def get_category_synonyms(category: str) -> list[str]:
-    """Get search query variations for a category.
-    
-    Returns the raw category and common variations. Does NOT use any
-    predefined keyword groups — the user's query determines the search.
-    """
-    cat_lower = category.lower().strip()
-    variations = [category]
-    
-    # Add singular/plural variations (threshold >3 so "spas" -> "spa")
-    if cat_lower.endswith("s") and len(cat_lower) > 3:
-        variations.append(cat_lower[:-1])
-    elif not cat_lower.endswith("s"):
-        variations.append(cat_lower + "s")
-    
-    return list(dict.fromkeys(variations))
+    """Return the category as-is. The user's query IS the search — no variations."""
+    return [category.strip()] if category.strip() else []
 
 
 def check_category_relevance(record: dict, category: str) -> bool:
@@ -235,17 +225,113 @@ def check_category_relevance(record: dict, category: str) -> bool:
         if _word_matches(dw):
             return True
 
-    # No domain word matched. Accept only if record has no analyzable text
-    # (fail-open for empty/minimal records). Reject records that have a name
-    # or industry — they are real businesses in a different category.
+    # No domain word matched. Use multi-signal rejection:
+    # 1. If industry != category (real business type): reject if clearly different
+    # 2. If industry == category (adapter-stamped): reject if name is cross-domain
+    # 3. If no industry: reject if name is purely generic
+    # Fail-open when signals are ambiguous (novel categories).
     name = (raw.get("name") or "").strip()
-    industry = (raw.get("industry") or "").strip()
-    has_content = bool(name or industry)
+    industry = (raw.get("industry") or "").lower().strip()
 
-    if not has_content:
+    if not name and not industry:
         return True
 
-    return False
+    # ── Signal 1: Real industry mismatch ──────────────────────────────────
+    # When industry != category, it reflects the actual business type.
+    # Reject only when category has an explicit conflict set AND industry is in it.
+    # For novel categories (no conflict set defined), fail-open — the adapter
+    # already scoped the search, so results are plausibly relevant.
+    INDUSTRY_CONFLICTS: dict[str, set[str]] = {
+        "clothing shops": {"food", "restaurant", "bakery", "cafe", "hospitality",
+                           "hotel", "healthcare", "automotive", "technology",
+                           "finance", "blog", "entertainment"},
+        "hospitals": {"food", "restaurant", "retail", "clothing", "fashion",
+                       "hospitality", "hotel", "entertainment", "technology",
+                       "automotive", "finance", "blog"},
+        "pharmacies": {"food", "restaurant", "retail", "clothing", "fashion",
+                        "hospitality", "hotel", "entertainment", "automotive",
+                        "technology", "blog", "finance"},
+        "hotels": {"food", "restaurant", "retail", "clothing", "fashion",
+                    "healthcare", "pharmaceutical", "blog", "technology"},
+        "solar companies": {"food", "restaurant", "retail", "clothing", "fashion",
+                             "hospitality", "healthcare", "blog", "technology"},
+        "bakeries": {"retail", "clothing", "fashion", "healthcare", "hospitality",
+                      "automotive", "technology", "restaurant", "blog"},
+        "spa": {"food", "restaurant", "retail", "clothing", "fashion",
+                "hospitality", "hotel", "healthcare", "automotive",
+                "technology", "blog"},
+        "parks": {"food", "restaurant", "retail", "clothing", "fashion",
+                  "hospitality", "hotel", "healthcare", "automotive",
+                  "technology", "finance", "blog"},
+    }
+
+    if industry and industry != cat_lower:
+        conflicting = INDUSTRY_CONFLICTS.get(cat_lower, set())
+        if conflicting and industry in conflicting:
+            return False
+        # For categories NOT in INDUSTRY_CONFLICTS: fail-open.
+        # The adapter scoped the search; unrelated industries are unlikely
+        # to be returned. Don't reject novel categories by word overlap —
+        # "office" IS valid for coworking, "food" IS valid for restaurants.
+
+    # ── Signal 2: Adapter-stamped industry (industry == category) ─────────
+    # The adapter set industry from the query — unreliable. Use name to detect
+    # cross-domain records (e.g., a clothing store appearing in bakery search).
+    # Also reject purely generic names with no domain-specific signal.
+    if industry == cat_lower and name:
+        CROSS_DOMAIN = {
+            "food": {"pizza", "bakery", "cake", "restaurant", "food", "biryani",
+                     "curry", "kitchen", "cafe", "coffee", "burger", "noodle",
+                     "pasta", "sushi", "steak", "bbq", "grill", "tandoori",
+                     "dosa", "idli", "sweets", "mithai", "snacks", "pastry",
+                     "juice", "tea", "smoothie", "donut", "noodle"},
+            "clothing": {"fashion", "clothing", "apparel", "textile", "wear",
+                         "garment", "boutique", "dress", "shirt", "saree",
+                         "kurti", "lehenga", "wardrobe"},
+            "technology": {"computer", "software", "tech", "digital", "cyber",
+                           "data", "cloud", "programming", "coding", "hack",
+                           "app", "web", "internet", "network", "server"},
+            "healthcare": {"hospital", "medical", "clinic", "pharma", "health",
+                           "doctor", "nurse", "surgery", "diagnostic", "dental"},
+            "automotive": {"car", "auto", "vehicle", "motor", "garage",
+                           "mechanic", "tyre", "battery", "showroom"},
+            "hospitality": {"hotel", "motel", "resort", "inn", "lodge",
+                            "hostel", "guest house", "homestay"},
+        }
+        name_words = set(re.findall(r"[a-zA-Z]{3,}", name.lower()))
+        GENERIC_NAME = {
+            "best", "business", "corp", "enterprise", "group", "solutions",
+            "services", "company", "companies", "traders", "dealers",
+            "distributors", "suppliers", "agency", "associates", "partners",
+            "global", "world", "international", "national", "general",
+            "universal", "premium", "prime", "star", "super", "top",
+            "generic", "quality", "reliable", "trusted", "first", "one",
+        }
+        for domain, indicators in CROSS_DOMAIN.items():
+            if domain != cat_lower and name_words & indicators:
+                return False
+        # Reject purely generic names — no domain signal at all
+        if name_words and not (name_words - GENERIC_NAME):
+            return False
+
+    # ── Signal 3: No industry, generic name ───────────────────────────────
+    # When there's no industry field, a purely generic business name with no
+    # domain-specific words is likely noise.
+    if not industry and name:
+        GENERIC_NAME = {
+            "best", "business", "corp", "enterprise", "group", "solutions",
+            "services", "company", "companies", "traders", "dealers",
+            "distributors", "suppliers", "agency", "associates", "partners",
+            "global", "world", "international", "national", "general",
+            "universal", "premium", "prime", "star", "super", "top",
+        }
+        name_words = set(re.findall(r"[a-zA-Z]{3,}", name.lower()))
+        if name_words and not (name_words - GENERIC_NAME):
+            return False
+
+    # Fail-open: accept the record. The adapter already scoped the search
+    # so results are plausibly relevant even without exact word overlap.
+    return True
 
 
 def build_location_scopes(location: str) -> list[str]:

@@ -7,6 +7,7 @@ About:
 
 from datetime import datetime
 from pydantic import BaseModel
+from uuid import UUID
 
 
 class LeadResponse(BaseModel):
@@ -24,6 +25,7 @@ class LeadResponse(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     source: str | None = None
+    sources: list[str] = []
     validation_status: str | None = None
     enrichment_description: str | None = None
     enrichment_email: str | None = None
@@ -31,5 +33,26 @@ class LeadResponse(BaseModel):
     total_score: float | None = None
     score_version: str | None = None
     scored_at: datetime | None = None
+    is_saved: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class LeadCreateRequest(BaseModel):
+    company_id: UUID
+    pipeline_run_id: UUID
+    raw_record_id: UUID | None = None
+
+
+class LeadCreateResponse(BaseModel):
+    id: str
+    company_id: str
+    pipeline_run_id: str
+    raw_record_id: str
+    validation_status: str
+    enrichment_status: str
+    lead_score: float | None = None
+    score_version: str | None = None
+    created_at: datetime
 
     model_config = {"from_attributes": True}

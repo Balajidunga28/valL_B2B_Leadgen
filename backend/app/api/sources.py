@@ -32,6 +32,14 @@ ALL_SOURCES = [
         "free": True,
     },
     {
+        "adapter_name": "google_maps_scraper",
+        "display_name": "Google Maps Scraper",
+        "category": "Search & Maps",
+        "description": "Playwright-based Google Maps scraper for detailed business listings with reviews, ratings, and contact info.",
+        "requires_api_key": False,
+        "free": True,
+    },
+    {
         "adapter_name": "openstreetmap",
         "display_name": "OpenStreetMap",
         "category": "Search & Maps",

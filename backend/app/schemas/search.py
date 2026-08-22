@@ -6,17 +6,39 @@ About:
 """
 
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+# Ordered list of valid sources (order matters for default)
+VALID_SOURCES_ORDERED = ["google_search", "google_maps_scraper", "openstreetmap", "web_search", "indiamart", "justdial"]
+VALID_SOURCES = frozenset(VALID_SOURCES_ORDERED)
+MAX_RESULTS_PER_SOURCE = 200
+MIN_RESULTS_PER_SOURCE = 1
+
+
+def validate_sources(v: list[str]) -> list[str]:
+    """Validate and filter sources against known valid sources."""
+    if not v:
+        raise ValueError("At least one source must be specified")
+    invalid = [s for s in v if s not in VALID_SOURCES]
+    if invalid:
+        raise ValueError(f"Invalid source(s): {', '.join(invalid)}. Valid sources: {', '.join(VALID_SOURCES_ORDERED)}")
+    return list(dict.fromkeys(v))  # Remove duplicates, preserve order
 
 
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500, description="Search query")
     location: str | None = Field(None, max_length=255, description="Location filter")
     sources: list[str] = Field(
-        default=["google_search", "openstreetmap", "web_search", "indiamart", "justdial"],
+        default=VALID_SOURCES_ORDERED,
         description="Data sources to search",
     )
-    limit: int = Field(default=100, ge=1, le=200, description="Max results per source")
+    limit: int = Field(default=100, ge=MIN_RESULTS_PER_SOURCE, le=MAX_RESULTS_PER_SOURCE, description="Max results per source")
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _validate_sources(cls, v: list[str]) -> list[str]:
+        return validate_sources(v)
 
 
 class PipelineRunResponse(BaseModel):

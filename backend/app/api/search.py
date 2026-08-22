@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User
 from app.api.deps import get_current_user
-from app.schemas.search import SearchRequest, SearchResponse, PipelineRunResponse, RawRecordResponse
+from app.schemas.search import SearchRequest, SearchResponse, PipelineRunResponse, RawRecordResponse, VALID_SOURCES
 from app.services.pipeline import run_extraction, get_pipeline_run, get_raw_records
 from app.services.level3 import run_clean
 from app.services.level4 import run_validate
@@ -22,7 +22,8 @@ from app.services.level6 import run_score
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
-ALL_FREE_SOURCES = ["google_search", "openstreetmap", "web_search", "indiamart", "justdial"]
+# Backward compatibility - tests expect this
+ALL_FREE_SOURCES = list(VALID_SOURCES)
 
 
 @router.post("", response_model=SearchResponse)
@@ -32,12 +33,26 @@ async def search(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Execute a search query against all configured data sources.
-    Automatically searches all free sources, then runs the full
-    pipeline (clean → validate → enrich → score) so results are
+    Execute a search query against selected data sources.
+    Runs the full pipeline (clean → validate → enrich → score) so results are
     immediately available on the Results page.
     """
-    sources = ALL_FREE_SOURCES
+    sources = request.sources
+    
+    # Validate sources are valid (schema does this, but double-check)
+    invalid = [s for s in sources if s not in VALID_SOURCES]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid source(s): {', '.join(invalid)}",
+        )
+    
+    # Enforce reasonable limit
+    if request.limit < 1 or request.limit > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Limit must be between 1 and 200",
+        )
 
     try:
         pipeline_run = await run_extraction(

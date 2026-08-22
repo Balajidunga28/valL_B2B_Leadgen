@@ -19,8 +19,6 @@ from urllib.parse import quote_plus
 from app.adapters.base import SourceAdapter
 from app.geo import (
     INDIAN_STATES_LOWER,
-    get_category_synonyms,
-    build_location_scopes,
     is_state_name,
 )
 
@@ -363,21 +361,10 @@ class GoogleSearchAdapter(SourceAdapter):
 
     async def search(self, query: str, location: str | None = None, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         await self._ensure_browser()
-        category, loc = _parse_query(query, location)
         extracted_at = datetime.now(timezone.utc).isoformat()
-        variations = get_category_synonyms(category)
-        scopes = build_location_scopes(loc) if loc else [""]
-        search_queries = []
 
-        # Primary: use the original user query as-is (most important)
-        search_queries.append(query.strip())
-
-        # Add scope+variation combinations (limit to 2 additional queries)
-        for scope in scopes[:1]:  # Only use first scope
-            for var in variations[:1]:  # Only use first variation
-                q = f"{var} in {scope}" if scope else var
-                if q not in search_queries:
-                    search_queries.append(q)
+        # The user's query IS the search — no variation generation
+        search_queries = [query.strip()]
 
         all_records: list[dict[str, Any]] = []
         seen_keys: set[str] = set()

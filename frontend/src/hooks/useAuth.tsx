@@ -13,7 +13,7 @@ import * as authApi from '../api/auth';
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  loading: boolean;
+  authChecked: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -24,14 +24,14 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('vallg_token'));
-  const [loading, setLoading] = useState(true);
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // Check token validity on mount
+  // Check token validity on mount — don't block the app
   useEffect(() => {
     async function checkAuth() {
       const storedToken = localStorage.getItem('vallg_token');
       if (!storedToken) {
-        setLoading(false);
+        setAuthChecked(true);
         return;
       }
 
@@ -40,12 +40,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(currentUser);
         setToken(storedToken);
       } catch {
-        // Token invalid or expired
+        // Token invalid or expired — clear it
         localStorage.removeItem('vallg_token');
         setToken(null);
         setUser(null);
       } finally {
-        setLoading(false);
+        setAuthChecked(true);
       }
     }
 
@@ -75,7 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, token, authChecked, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );
