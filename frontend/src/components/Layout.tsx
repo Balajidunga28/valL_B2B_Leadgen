@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import * as authApi from '../api/auth';
 
 const navItems: Array<{
   path: string;
@@ -92,9 +93,28 @@ const navItems: Array<{
 ];
 
 export default function Layout() {
-  const { user, authChecked, logout } = useAuth();
+  const { user, token, setUser, logout } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [loading, setLoading] = useState(!user && !!token);
+
+  // Fetch user in background if token exists but user not loaded yet
+  useEffect(() => {
+    if (user || !token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const u = await authApi.getCurrentUser();
+        if (!cancelled) {
+          setUser(u);
+          setLoading(false);
+        }
+      } catch {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, token, setUser]);
 
   const closeMobile = useCallback(() => setMobileOpen(false), []);
 
@@ -111,8 +131,11 @@ export default function Layout() {
     return () => { document.body.style.overflow = ''; };
   }, [mobileOpen]);
 
-  // Brief loading state only while checking auth token validity
-  if (!authChecked) {
+  if (!token) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-dark-950">
         <div className="flex flex-col items-center gap-3">
