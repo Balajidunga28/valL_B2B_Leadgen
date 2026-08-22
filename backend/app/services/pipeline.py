@@ -17,8 +17,8 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-SOURCE_TIMEOUT = 30.0
-OVERALL_EXTRACTION_TIMEOUT = 60.0
+SOURCE_TIMEOUT = 15.0
+OVERALL_EXTRACTION_TIMEOUT = 25.0
 PER_LISTING_TIMEOUT = 10.0
 MAX_LISTINGS_PER_SOURCE = 200
 

@@ -120,12 +120,8 @@ class GoogleSearchAdapter(SourceAdapter):
     def _build_maps_url(self, query: str) -> str:
         return f"{MAPS_URL}/search/{quote_plus(query)}"
 
-    # --- httpx fallback: use Bing search instead of broken Google Maps HTML parsing ---
     async def _search_httpx(self, search_query: str, limit: int, extracted_at: str) -> list[dict[str, Any]]:
-        """Fallback: when Playwright is unavailable, search Bing for business listings.
-        
-        Constructs location-aware queries and validates geographic relevance of results.
-        """
+        """Fallback: when Playwright is unavailable, search Bing then DuckDuckGo."""
         from urllib.parse import quote_plus as qp
         headers = {
             "User-Agent": random.choice(USER_AGENTS),
@@ -134,29 +130,15 @@ class GoogleSearchAdapter(SourceAdapter):
         }
         records = []
 
-        # Extract location from query for geographic validation
-        query_loc = ""
-        if " in " in search_query:
-            query_loc = search_query.split(" in ", 1)[-1].strip().lower()
-        elif " near " in search_query:
-            query_loc = search_query.split(" near ", 1)[-1].strip().lower()
+        from bs4 import BeautifulSoup
 
-        # Build Bing queries - use the full search query as-is for primary search
-        bing_queries = [
-            search_query,
-        ]
-
-        for bing_q in bing_queries:
-            bing_url = f"https://www.bing.com/search?q={qp(bing_q)}"
-            try:
-                resp = await self.client.get(bing_url, headers=headers, follow_redirects=True, timeout=15.0)
-                if resp.status_code != 200:
-                    continue
-                html = resp.text
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(html, "html.parser")
-                items = soup.select("li.b_algo")
-                for item in items:
+        # Try Bing first
+        bing_url = f"https://www.bing.com/search?q={qp(search_query)}"
+        try:
+            resp = await self.client.get(bing_url, headers=headers, follow_redirects=True, timeout=10.0)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for item in soup.select("li.b_algo"):
                     title_el = item.select_one("h2 a")
                     snippet_el = item.select_one(".b_caption p, .b_algoSlug")
                     if not title_el:
@@ -165,46 +147,85 @@ class GoogleSearchAdapter(SourceAdapter):
                     snippet = snippet_el.get_text(strip=True) if snippet_el else ""
                     link = title_el.get("href", "")
                     combined = f"{title} {snippet}"
-
                     phones = []
-                    for pm in re.finditer(r"(?:\+91[\s\-]?)?(\d{5}[\s\-]?\d{5}|\d{4}[\s\-]?\d{3}[\s\-]?\d{3}|\d{10})", combined):
+                    for pm in re.finditer(r"(?:\+?\d{1,4}[\s\-]?)?\(?\d{2,4}\)?[\s\-]?\d{3,4}[\s\-]?\d{3,4}", combined):
                         phone = re.sub(r"[^0-9+]", "", pm.group(0))
                         if len(phone) >= 10:
                             phones.append(phone)
                     name = title.strip()
-                    skip_words = ["list of", "top ", "best ", "directory of", "find ", "how to", "what is", "near me"]
+                    skip_words = ["list of", "top ", "best ", "directory of", "find ", "how to", "what is"]
                     if any(sw in name.lower() for sw in skip_words):
                         continue
                     if len(name) < 3 or len(name) > 100:
                         continue
-                    name = re.sub(r"\s*[-–|]\s*(?:India|list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
+                    name = re.sub(r"\s*[-\u2013|]\s*(?:list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
                     if len(name) > 2:
                         records.append({
-                            "name": name,
-                            "address": None,
+                            "name": name, "address": None,
                             "phone": phones[0] if phones else None,
                             "website": link if link and "bing.com" not in link else None,
-                            "rating": None,
-                            "reviews_count": None,
-                            "category": None,
-                            "opening_hours": None,
-                            "latitude": None,
-                            "longitude": None,
+                            "rating": None, "reviews_count": None,
+                            "category": None, "opening_hours": None,
+                            "latitude": None, "longitude": None,
                             "maps_url": None,
                             "_provenance": {
-                                "search_query": search_query,
-                                "search_url": link,
-                                "extracted_at": extracted_at,
-                                "extraction_method": "google_search_bing_fallback",
-                                "user_agent": headers["User-Agent"],
+                                "search_query": search_query, "search_url": link,
+                                "extracted_at": extracted_at, "extraction_method": "google_search_bing_fallback",
+                                "source_type": "bing_results",
                             },
                         })
                         if len(records) >= limit:
                             break
+        except Exception as e:
+            logger.debug("Bing fallback error for '%s': %s", search_query, e)
+
+        # If Bing returned nothing, try DuckDuckGo
+        if not records:
+            ddg_url = f"https://html.duckduckgo.com/html/?q={qp(search_query)}"
+            try:
+                resp = await self.client.get(ddg_url, headers=headers, follow_redirects=True, timeout=10.0)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    for item in soup.select(".result"):
+                        title_el = item.select_one(".result__title")
+                        snippet_el = item.select_one(".result__snippet")
+                        link_el = item.select_one(".result__url")
+                        if not title_el:
+                            continue
+                        title = title_el.get_text(strip=True)
+                        snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                        link = link_el.get_text(strip=True) if link_el else ""
+                        combined = f"{title} {snippet}"
+                        phones = []
+                        for pm in re.finditer(r"(?:\+?\d{1,4}[\s\-]?)?\(?\d{2,4}\)?[\s\-]?\d{3,4}[\s\-]?\d{3,4}", combined):
+                            phone = re.sub(r"[^0-9+]", "", pm.group(0))
+                            if len(phone) >= 10:
+                                phones.append(phone)
+                        name = title.strip()
+                        skip_words = ["list of", "top ", "best ", "directory of", "find ", "how to", "what is"]
+                        if any(sw in name.lower() for sw in skip_words):
+                            continue
+                        if len(name) < 3 or len(name) > 100:
+                            continue
+                        name = re.sub(r"\s*[-\u2013|]\s*(?:list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
+                        if len(name) > 2:
+                            records.append({
+                                "name": name, "address": None,
+                                "phone": phones[0] if phones else None,
+                                "website": None, "rating": None, "reviews_count": None,
+                                "category": None, "opening_hours": None,
+                                "latitude": None, "longitude": None, "maps_url": None,
+                                "_provenance": {
+                                    "search_query": search_query, "search_url": link,
+                                    "extracted_at": extracted_at, "extraction_method": "google_search_ddg_fallback",
+                                    "source_type": "duckduckgo_results",
+                                },
+                            })
+                            if len(records) >= limit:
+                                break
             except Exception as e:
-                logger.error("Google Maps httpx Bing fallback error for '%s': %s", search_query, e)
-            if len(records) >= limit:
-                break
+                logger.debug("DuckDuckGo fallback error for '%s': %s", search_query, e)
+
         return records[:limit]
 
     # --- Playwright path (optimized) ---

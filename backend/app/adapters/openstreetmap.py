@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
+    "https://overpass-api.openstreetmap.ru/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass-api.openstreetmap.ru/api/interpreter",
 ]
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 
@@ -243,8 +243,8 @@ class OpenStreetMapAdapter(SourceAdapter):
                 resp = await self.client.post(
                     mirror_url,
                     data={"data": overpass_ql},
-                    headers={"User-Agent": "ValLG/1.0"},
-                    timeout=45.0,
+                    headers={"User-Agent": "ValLG/1.0", "Accept": "application/json"},
+                    timeout=10.0,
                 )
                 resp.raise_for_status()
                 return resp.json()
@@ -257,7 +257,7 @@ class OpenStreetMapAdapter(SourceAdapter):
         
         data = None
         while tasks:
-            done, tasks = await asyncio.wait(tasks, timeout=50.0, return_when=asyncio.FIRST_COMPLETED)
+            done, tasks = await asyncio.wait(tasks, timeout=15.0, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 try:
                     result = task.result()

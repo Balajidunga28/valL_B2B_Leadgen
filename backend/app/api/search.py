@@ -2,23 +2,24 @@
 url: /backend/app/api/search.py
 About:
   Search API endpoints for ValLG. Handles search queries, creates pipeline
-  runs, orchestrates source adapters, and runs the full pipeline
-  (extract → clean → validate → enrich → score) in a single request.
+  runs, orchestrates source adapters. Extraction runs inline, post-processing
+  (clean → validate → enrich → score) runs as a background task so the
+  response returns within Render's 30s HTTP timeout.
   All endpoints require JWT authentication.
 """
 
+import asyncio
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, async_session_factory
 from app.models.user import User
 from app.api.deps import get_current_user
 from app.schemas.search import SearchRequest, SearchResponse, PipelineRunResponse, RawRecordResponse, VALID_SOURCES
 from app.services.pipeline import run_extraction, get_pipeline_run, get_raw_records
-from app.services.level3 import run_clean
-from app.services.level4 import run_validate
-from app.services.level5 import run_enrich
-from app.services.level6 import run_score
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/search", tags=["search"])
 
@@ -78,19 +79,27 @@ async def search(
     run_total_extracted = pipeline_run.total_extracted
     run_error_message = pipeline_run.error_message
     run_created_at = pipeline_run.created_at
+    org_id = current_user.organization_id
 
-    # Chain Levels 3-6 so companies are available immediately.
-    # Pass pipeline_run_id to run_clean so it only processes raw records
-    # from THIS search, not all historical records for the org.
-    try:
-        await run_clean(db, current_user.organization_id, pipeline_run_id=run_id)
-        await run_validate(db, current_user.organization_id)
-        await run_enrich(db, current_user.organization_id)
-        await run_score(db, current_user.organization_id)
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("Pipeline post-processing error: %s", e)
-        await db.rollback()
+    # Run post-processing (clean → validate → enrich → score) in background
+    # so the response returns within Render's 30s HTTP timeout
+    async def _run_post_processing():
+        from app.services.level3 import run_clean
+        from app.services.level4 import run_validate
+        from app.services.level5 import run_enrich
+        from app.services.level6 import run_score
+        async with async_session_factory() as bg_db:
+            try:
+                await run_clean(bg_db, org_id, pipeline_run_id=run_id)
+                await run_validate(bg_db, org_id)
+                await run_enrich(bg_db, org_id)
+                await run_score(bg_db, org_id)
+                await bg_db.commit()
+            except Exception as e:
+                logger.warning("Background post-processing error: %s", e)
+                await bg_db.rollback()
+
+    asyncio.create_task(_run_post_processing())
 
     return SearchResponse(
         pipeline_run=PipelineRunResponse(

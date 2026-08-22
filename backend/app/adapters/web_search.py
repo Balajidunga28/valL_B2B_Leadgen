@@ -1,9 +1,10 @@
 """
 url: /backend/app/adapters/web_search.py
 About:
-  Bing search adapter with Playwright + httpx fallback. Searches Bing for
-  business directory listings. When Playwright is unavailable (Render free tier),
-  falls back to httpx HTML parsing. Fully generic — no hardcoded logic.
+  Bing/DuckDuckGo search adapter with Playwright + httpx fallback. Searches
+  for business directory listings. When Playwright is unavailable (Render
+  free tier), falls back to httpx HTML parsing via Bing then DuckDuckGo.
+  Fully generic — no hardcoded logic.
 """
 
 import asyncio
@@ -26,23 +27,10 @@ USER_AGENTS = [
 ]
 
 BING_SEARCH_URL = "https://www.bing.com/search"
+DDG_SEARCH_URL = "https://html.duckduckgo.com/html/"
 
 PER_LISTING_TIMEOUT = 10.0
 MAX_RESULTS_PER_QUERY = 50
-
-
-def _parse_query(query: str, location: str | None) -> tuple[str, str]:
-    """Parse query into (category, location). Location param overrides query location."""
-    for pat in [r"^(.+?)\s+(?:in|near|around|at|of)\s+(.+)$", r"^(.+?)\s*[-]\s*(.+)$"]:
-        m = re.match(pat, query, re.IGNORECASE)
-        if m:
-            cat = m.group(1).strip()
-            if location:
-                return cat, location.strip()
-            return cat, m.group(2).strip()
-    if location:
-        return query.strip(), location.strip()
-    return query.strip(), ""
 
 
 def _dedup_key(record: dict) -> str:
@@ -55,7 +43,7 @@ def _dedup_key(record: dict) -> str:
 
 def _extract_phones(text: str) -> list[str]:
     phones = []
-    for m in re.finditer(r"(?:\+91[\s\-]?)?(\d{5}[\s\-]?\d{5}|\d{4}[\s\-]?\d{3}[\s\-]?\d{3}|\d{10})", text):
+    for m in re.finditer(r"(?:\+?\d{1,4}[\s\-]?)?\(?\d{2,4}\)?[\s\-]?\d{3,4}[\s\-]?\d{3,4}", text):
         phone = re.sub(r"[^0-9+]", "", m.group(0))
         if len(phone) >= 10:
             phones.append(phone)
@@ -84,12 +72,12 @@ def _extract_business_name_from_snippet(title: str, snippet: str) -> str | None:
             return None
     if len(name) < 3 or len(name) > 100:
         return None
-    name = re.sub(r"\s*[-–|]\s*(?:India|list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
+    name = re.sub(r"\s*[-\u2013|]\s*(?:India|list|directory|contact|guide|article).*$", "", name, flags=re.IGNORECASE).strip()
     return name if len(name) > 2 else None
 
 
 class WebSearchAdapter(SourceAdapter):
-    """Discovers businesses through Bing search results."""
+    """Discovers businesses through Bing/DuckDuckGo search results."""
 
     name = "web_search"
     display_name = "Web Search (Free)"
@@ -123,12 +111,7 @@ class WebSearchAdapter(SourceAdapter):
     async def _rate_limit(self):
         await asyncio.sleep(random.uniform(self.delay_min, self.delay_max))
 
-    # --- httpx fallback: parse Bing search HTML ---
-    async def _search_bing_httpx(self, query: str, page_num: int = 0, location: str | None = None) -> list[dict[str, Any]]:
-        """Fallback: fetch Bing search via httpx and parse HTML.
-        
-        When location is provided, validates that results mention the location.
-        """
+    async def _search_bing_httpx(self, query: str, page_num: int = 0) -> list[dict[str, Any]]:
         offset = page_num * 10
         url = f"{BING_SEARCH_URL}?q={quote_plus(query)}&first={offset + 1}"
         headers = {
@@ -138,16 +121,12 @@ class WebSearchAdapter(SourceAdapter):
         }
         results = []
         try:
-            resp = await self.client.get(url, headers=headers, follow_redirects=True, timeout=15.0)
+            resp = await self.client.get(url, headers=headers, follow_redirects=True, timeout=10.0)
             if resp.status_code != 200:
-                logger.warning("Bing httpx returned %d for '%s'", resp.status_code, query)
                 return []
-            html = resp.text
             from bs4 import BeautifulSoup
-            soup = BeautifulSoup(html, "html.parser")
-            # Bing search results are in <li class="b_algo"> elements
-            items = soup.select("li.b_algo")
-            for item in items:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for item in soup.select("li.b_algo"):
                 title_el = item.select_one("h2 a")
                 snippet_el = item.select_one(".b_caption p, .b_algoSlug")
                 if not title_el:
@@ -156,7 +135,6 @@ class WebSearchAdapter(SourceAdapter):
                 snippet = snippet_el.get_text(strip=True) if snippet_el else ""
                 link = title_el.get("href", "")
                 combined = f"{title} {snippet}"
-
                 phones = _extract_phones(combined)
                 name = _extract_business_name_from_snippet(title, snippet)
                 if name:
@@ -167,10 +145,47 @@ class WebSearchAdapter(SourceAdapter):
                         "snippet": snippet[:200],
                     })
         except Exception as e:
-            logger.error("Bing httpx error for '%s': %s", query, e)
+            logger.debug("Bing httpx error for '%s': %s", query, e)
         return results
 
-    # --- Playwright path ---
+    async def _search_ddg_httpx(self, query: str) -> list[dict[str, Any]]:
+        """Search DuckDuckGo HTML endpoint — less likely to block datacenter IPs."""
+        url = f"{DDG_SEARCH_URL}?q={quote_plus(query)}"
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        results = []
+        try:
+            resp = await self.client.get(url, headers=headers, follow_redirects=True, timeout=10.0)
+            if resp.status_code != 200:
+                return []
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for item in soup.select(".result"):
+                title_el = item.select_one(".result__title")
+                snippet_el = item.select_one(".result__snippet")
+                link_el = item.select_one(".result__url")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+                link = link_el.get_text(strip=True) if link_el else ""
+                combined = f"{title} {snippet}"
+                phones = _extract_phones(combined)
+                name = _extract_business_name_from_snippet(title, snippet)
+                if name:
+                    results.append({
+                        "name": name,
+                        "phone": phones[0] if phones else None,
+                        "source_url": link,
+                        "snippet": snippet[:200],
+                    })
+        except Exception as e:
+            logger.debug("DuckDuckGo httpx error for '%s': %s", query, e)
+        return results
+
     async def _search_bing(self, query: str, page_num: int = 0) -> list[dict[str, Any]]:
         user_agent = random.choice(USER_AGENTS)
         context = await self._browser.new_context(
@@ -225,80 +240,79 @@ class WebSearchAdapter(SourceAdapter):
             await context.close()
         return results
 
+    async def _build_record(self, sr: dict, source_type: str, extracted_at: str, search_query: str) -> dict[str, Any]:
+        return {
+            "name": sr["name"],
+            "phone": sr.get("phone"),
+            "address": None,
+            "website": None,
+            "maps_url": None,
+            "category": None,
+            "latitude": None,
+            "longitude": None,
+            "rating": None,
+            "reviews_count": None,
+            "opening_hours": None,
+            "source_url": sr.get("source_url"),
+            "_provenance": {
+                "search_query": search_query,
+                "search_url": sr.get("source_url", ""),
+                "extracted_at": extracted_at,
+                "extraction_method": "web_search",
+                "source_type": source_type,
+            },
+        }
+
     async def search(self, query: str, location: str | None = None, limit: int = 20, offset: int = 0) -> list[dict[str, Any]]:
         await self._ensure_browser()
         extracted_at = datetime.now(timezone.utc).isoformat()
-
-        # The user's query IS the search — no modification
         search_terms = [query.strip()]
-
         all_records: list[dict[str, Any]] = []
         seen_names: set[str] = set()
 
+        def _add_records(results_list, source_type, search_query):
+            nonlocal all_records, seen_names
+            for sr in results_list:
+                name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
+                if name_key in seen_names or len(name_key) < 3:
+                    continue
+                seen_names.add(name_key)
+                all_records.append(asyncio.get_event_loop().run_until_complete(
+                    self._build_record(sr, source_type, extracted_at, search_query)
+                ) if False else {
+                    "name": sr["name"], "phone": sr.get("phone"),
+                    "address": None, "website": None, "maps_url": None,
+                    "category": None, "latitude": None, "longitude": None,
+                    "rating": None, "reviews_count": None, "opening_hours": None,
+                    "source_url": sr.get("source_url"),
+                    "_provenance": {
+                        "search_query": search_query, "search_url": sr.get("source_url", ""),
+                        "extracted_at": extracted_at, "extraction_method": "web_search",
+                        "source_type": source_type,
+                    },
+                })
+                if len(all_records) >= limit:
+                    break
+
         if self._has_playwright and self._browser:
-            # Playwright path: run sequentially (browser resource constraints)
             for st in search_terms:
                 search_results = await self._search_bing(st)
+                _add_records(search_results, "bing_results", st)
+                if len(all_records) >= limit:
+                    break
                 await self._rate_limit()
-                for sr in search_results:
-                    name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
-                    if name_key in seen_names or len(name_key) < 3:
-                        continue
-                    seen_names.add(name_key)
-                    record = {
-                        "name": sr["name"], "phone": sr.get("phone"),
-                        "address": None, "website": None, "maps_url": None,
-                        "category": category if category else None,
-                        "latitude": None, "longitude": None,
-                        "rating": None, "reviews_count": None, "opening_hours": None,
-                        "source_url": sr.get("source_url"),
-                        "_provenance": {
-                            "search_query": st, "search_url": sr.get("source_url", ""),
-                            "extracted_at": extracted_at, "extraction_method": "web_search",
-                            "source_type": "bing_results",
-                        },
-                    }
-                    all_records.append(record)
-                    if len(all_records) >= limit:
-                        break
-                if len(all_records) >= limit:
-                    break
         else:
-            # httpx fallback: run search terms concurrently for speed
-            async def search_one(st: str):
-                return await self._search_bing_httpx(st, location=loc)
-
-            tasks = [search_one(st) for st in search_terms]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for result in results:
-                if isinstance(result, Exception):
-                    continue
-                for sr in result:
-                    name_key = re.sub(r"[^a-z0-9]", "", sr["name"].lower())
-                    if name_key in seen_names or len(name_key) < 3:
-                        continue
-                    seen_names.add(name_key)
-                    record = {
-                        "name": sr["name"], "phone": sr.get("phone"),
-                        "address": None, "website": None, "maps_url": None,
-                        "category": category if category else None,
-                        "latitude": None, "longitude": None,
-                        "rating": None, "reviews_count": None, "opening_hours": None,
-                        "source_url": sr.get("source_url"),
-                        "_provenance": {
-                            "search_query": sr.get("search_query", ""), "search_url": sr.get("source_url", ""),
-                            "extracted_at": extracted_at, "extraction_method": "web_search",
-                            "source_type": "bing_results",
-                        },
-                    }
-                    all_records.append(record)
-                    if len(all_records) >= limit:
-                        break
+            for st in search_terms:
+                bing_results = await self._search_bing_httpx(st)
+                if bing_results:
+                    _add_records(bing_results, "bing_results", st)
+                elif len(all_records) < limit:
+                    ddg_results = await self._search_ddg_httpx(st)
+                    _add_records(ddg_results, "duckduckgo_results", st)
                 if len(all_records) >= limit:
                     break
 
-        logger.info(f"Web search total: {len(all_records)} unique from {len(search_terms)} queries")
+        logger.info("Web search total: %d unique results", len(all_records))
         return all_records[:limit]
 
     def normalize(self, raw_record: dict[str, Any]) -> dict[str, Any]:
